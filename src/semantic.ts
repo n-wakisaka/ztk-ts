@@ -1,11 +1,8 @@
 import { getSections, type ZtkDocument, type ZtkKeyValueNode, type ZtkSection } from './ast.js';
-
-export type ZtkDiagnostic = {
-  code: string;
-  message: string;
-  tag: string | null;
-  key?: string;
-};
+import {
+  createValidationDiagnostic,
+  type ZtkValidationDiagnostic as ZtkDiagnostic,
+} from './diagnostics.js';
 
 export type ZtkVec2 = [number, number];
 export type ZtkVec3 = [number, number, number];
@@ -403,6 +400,13 @@ export type ZtkSemanticDocument = {
   diagnostics: ZtkDiagnostic[];
 };
 
+function pushDiagnostic(
+  diagnostics: ZtkDiagnostic[],
+  diagnostic: Omit<ZtkDiagnostic, 'kind'>,
+): void {
+  diagnostics.push(createValidationDiagnostic(diagnostic));
+}
+
 function parseText(node: ZtkKeyValueNode | undefined): string | undefined {
   if (!node) {
     return undefined;
@@ -456,7 +460,7 @@ function parseJointSpec(
   const dof = baseType ? JOINT_DOF[baseType] : undefined;
 
   if (baseType && dof === undefined) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'unknown-jointtype',
       message: `Unknown joint type "${jointType}"`,
       tag,
@@ -502,7 +506,7 @@ function parseNumberValue(
 
   const num = Number(value);
   if (Number.isNaN(num)) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-number',
       message: `Expected numeric value but got "${value}"`,
       tag,
@@ -527,7 +531,7 @@ function parseNumberList(
   for (const token of node.values) {
     const num = Number(token);
     if (Number.isNaN(num)) {
-      diagnostics.push({
+      pushDiagnostic(diagnostics, {
         code: 'invalid-number',
         message: `Expected numeric token but got "${token}"`,
         tag,
@@ -565,7 +569,7 @@ function parseJointState(
   for (const token of valueTokens) {
     const num = Number(token);
     if (Number.isNaN(num)) {
-      diagnostics.push({
+      pushDiagnostic(diagnostics, {
         code: 'invalid-number',
         message: `Expected numeric token but got "${token}"`,
         tag,
@@ -608,7 +612,7 @@ function parseVec3(
     return undefined;
   }
   if (values.length < 3) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-arity',
       message: `Expected 3 numbers but got ${values.length}`,
       tag,
@@ -629,7 +633,7 @@ function parseVec2(
     return undefined;
   }
   if (values.length < 2) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-arity',
       message: `Expected 2 numbers but got ${values.length}`,
       tag,
@@ -650,7 +654,7 @@ function parseMat3(
     return undefined;
   }
   if (values.length < 9) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-arity',
       message: `Expected 9 numbers but got ${values.length}`,
       tag,
@@ -681,7 +685,7 @@ function parseMat3x4(
     return undefined;
   }
   if (values.length < 12) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-arity',
       message: `Expected 12 numbers but got ${values.length}`,
       tag,
@@ -876,7 +880,7 @@ function parseAngleAxisRotation(
     return undefined;
   }
   if (values.length < 4) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-arity',
       message: `Expected 4 numbers but got ${values.length}`,
       tag,
@@ -1014,6 +1018,48 @@ function take(
   return all(entries, key).slice(0, count);
 }
 
+function reportRepeatedKeyOverflow(
+  key: string,
+  nodes: ZtkKeyValueNode[],
+  maxCount: number,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): void {
+  if (nodes.length <= maxCount) {
+    return;
+  }
+  pushDiagnostic(diagnostics, {
+    code: 'repeated-key-overflow',
+    message: `Key "${key}" accepts at most ${maxCount} occurrence(s); extra occurrences are ignored`,
+    tag,
+    key,
+  });
+}
+
+function takeKnown(
+  entries: Map<string, ZtkKeyValueNode[]>,
+  key: string,
+  count: number,
+  used: Set<ZtkKeyValueNode>,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkKeyValueNode[] {
+  const nodes = all(entries, key);
+  markUsed(used, nodes);
+  reportRepeatedKeyOverflow(key, nodes, count, diagnostics, tag);
+  return nodes.slice(0, count);
+}
+
+function singleKnown(
+  entries: Map<string, ZtkKeyValueNode[]>,
+  key: string,
+  used: Set<ZtkKeyValueNode>,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkKeyValueNode | undefined {
+  return takeKnown(entries, key, 1, used, diagnostics, tag)[0];
+}
+
 function markUsed(
   used: Set<ZtkKeyValueNode>,
   nodes: ZtkKeyValueNode | ZtkKeyValueNode[] | (ZtkKeyValueNode | undefined)[] | undefined,
@@ -1077,11 +1123,10 @@ function parseTransform(
   };
 }
 
-function parseChain(section: ZtkSection, _diagnostics: ZtkDiagnostic[]): ZtkChain {
+function parseChain(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkChain {
   const entries = createEntries(section);
   const used = new Set<ZtkKeyValueNode>();
-  const nameNode = first(entries, 'name');
-  markUsed(used, nameNode);
+  const nameNode = singleKnown(entries, 'name', used, diagnostics, 'roki::chain');
 
   return {
     tag: 'roki::chain',
@@ -1156,7 +1201,7 @@ function parseIkJoint(
   for (const token of values) {
     const parsed = Number(token);
     if (!Number.isFinite(parsed)) {
-      diagnostics.push({
+      pushDiagnostic(diagnostics, {
         code: 'invalid-number',
         message: `Could not parse number "${token}"`,
         tag,
@@ -1183,7 +1228,7 @@ function parseIkVec3At(
 ): { value?: ZtkVec3; nextIndex: number } {
   const values = tokens.slice(index + 1, index + 4).map((token) => Number(token));
   if (values.length < 3 || values.some((value) => !Number.isFinite(value))) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-number',
       message: `Could not parse vec3 near "${tokens[index]}"`,
       tag,
@@ -1204,7 +1249,7 @@ function parseIkConstraint(
 ): ZtkIkConstraint | undefined {
   const [priorityToken, name, type, ...payload] = node.values;
   if (!priorityToken || !name || !type) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-arity',
       message: `Expected at least 3 values but got ${node.values.length}`,
       tag,
@@ -1215,7 +1260,7 @@ function parseIkConstraint(
 
   const priority = Number(priorityToken);
   if (!Number.isFinite(priority)) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-number',
       message: `Could not parse number "${priorityToken}"`,
       tag,
@@ -1297,35 +1342,19 @@ function parseMotor(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkMotor
   const entries = createEntries(section);
   const used = new Set<ZtkKeyValueNode>();
 
-  const nameNode = first(entries, 'name');
-  const typeNode = first(entries, 'type');
-  const minNode = first(entries, 'min');
-  const maxNode = first(entries, 'max');
-  const motorConstantNode = first(entries, 'motorconstant');
-  const admittanceNode = first(entries, 'admittance');
-  const maxVoltageNode = first(entries, 'maxvoltage');
-  const minVoltageNode = first(entries, 'minvoltage');
-  const gearRatioNode = first(entries, 'gearratio');
-  const rotorInertiaNode = first(entries, 'rotorinertia');
-  const gearInertiaNode = first(entries, 'gearinertia');
-  const compKNode = first(entries, 'compk');
-  const compLNode = first(entries, 'compl');
-
-  markUsed(used, [
-    nameNode,
-    typeNode,
-    minNode,
-    maxNode,
-    motorConstantNode,
-    admittanceNode,
-    maxVoltageNode,
-    minVoltageNode,
-    gearRatioNode,
-    rotorInertiaNode,
-    gearInertiaNode,
-    compKNode,
-    compLNode,
-  ]);
+  const nameNode = singleKnown(entries, 'name', used, diagnostics, 'roki::motor');
+  const typeNode = singleKnown(entries, 'type', used, diagnostics, 'roki::motor');
+  const minNode = singleKnown(entries, 'min', used, diagnostics, 'roki::motor');
+  const maxNode = singleKnown(entries, 'max', used, diagnostics, 'roki::motor');
+  const motorConstantNode = singleKnown(entries, 'motorconstant', used, diagnostics, 'roki::motor');
+  const admittanceNode = singleKnown(entries, 'admittance', used, diagnostics, 'roki::motor');
+  const maxVoltageNode = singleKnown(entries, 'maxvoltage', used, diagnostics, 'roki::motor');
+  const minVoltageNode = singleKnown(entries, 'minvoltage', used, diagnostics, 'roki::motor');
+  const gearRatioNode = singleKnown(entries, 'gearratio', used, diagnostics, 'roki::motor');
+  const rotorInertiaNode = singleKnown(entries, 'rotorinertia', used, diagnostics, 'roki::motor');
+  const gearInertiaNode = singleKnown(entries, 'gearinertia', used, diagnostics, 'roki::motor');
+  const compKNode = singleKnown(entries, 'compk', used, diagnostics, 'roki::motor');
+  const compLNode = singleKnown(entries, 'compl', used, diagnostics, 'roki::motor');
 
   return {
     tag: 'roki::motor',
@@ -1372,23 +1401,25 @@ function inferContactType(section: ZtkSection): ZtkContactType | undefined {
 function parseContact(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkContact {
   const entries = createEntries(section);
   const used = new Set<ZtkKeyValueNode>();
-  const bindNode = first(entries, 'bind');
-  const staticFrictionNode = first(entries, 'staticfriction');
-  const kineticFrictionNode = first(entries, 'kineticfriction');
-  const compensationNode = first(entries, 'compensation');
-  const relaxationNode = first(entries, 'relaxation');
-  const elasticityNode = first(entries, 'elasticity');
-  const viscosityNode = first(entries, 'viscosity');
-
-  markUsed(used, [
-    bindNode,
-    staticFrictionNode,
-    kineticFrictionNode,
-    compensationNode,
-    relaxationNode,
-    elasticityNode,
-    viscosityNode,
-  ]);
+  const bindNode = singleKnown(entries, 'bind', used, diagnostics, 'roki::contact');
+  const staticFrictionNode = singleKnown(
+    entries,
+    'staticfriction',
+    used,
+    diagnostics,
+    'roki::contact',
+  );
+  const kineticFrictionNode = singleKnown(
+    entries,
+    'kineticfriction',
+    used,
+    diagnostics,
+    'roki::contact',
+  );
+  const compensationNode = singleKnown(entries, 'compensation', used, diagnostics, 'roki::contact');
+  const relaxationNode = singleKnown(entries, 'relaxation', used, diagnostics, 'roki::contact');
+  const elasticityNode = singleKnown(entries, 'elasticity', used, diagnostics, 'roki::contact');
+  const viscosityNode = singleKnown(entries, 'viscosity', used, diagnostics, 'roki::contact');
 
   return {
     tag: 'roki::contact',
@@ -1409,50 +1440,47 @@ function parseLink(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkLink {
   const entries = createEntries(section);
   const used = new Set<ZtkKeyValueNode>();
 
-  const nameNode = first(entries, 'name');
-  const jointTypeNode = first(entries, 'jointtype');
-  const massNode = first(entries, 'mass');
-  const densityNode = first(entries, 'density');
-  const stuffNode = first(entries, 'stuff');
-  const comNode = first(entries, 'COM');
-  const inertiaNode = first(entries, 'inertia');
-  const disNode = first(entries, 'dis');
-  const minNode = first(entries, 'min');
-  const maxNode = first(entries, 'max');
-  const stiffnessNode = first(entries, 'stiffness');
-  const viscosityNode = first(entries, 'viscosity') ?? first(entries, 'viscos');
-  const coulombNode = first(entries, 'coulomb');
-  const staticFrictionNode = first(entries, 'staticfriction');
-  const breakNode = first(entries, 'break');
-  const motorNode = first(entries, 'motor');
-  const forceThresholdNode = first(entries, 'forcethreshold');
-  const torqueThresholdNode = first(entries, 'torquethreshold');
-  const parentNode = first(entries, 'parent');
-  const bindNode = first(entries, 'bind');
+  const nameNode = singleKnown(entries, 'name', used, diagnostics, 'roki::link');
+  const jointTypeNode = singleKnown(entries, 'jointtype', used, diagnostics, 'roki::link');
+  const massNode = singleKnown(entries, 'mass', used, diagnostics, 'roki::link');
+  const densityNode = singleKnown(entries, 'density', used, diagnostics, 'roki::link');
+  const stuffNode = singleKnown(entries, 'stuff', used, diagnostics, 'roki::link');
+  const comNode = singleKnown(entries, 'COM', used, diagnostics, 'roki::link');
+  const inertiaNode = singleKnown(entries, 'inertia', used, diagnostics, 'roki::link');
+  const disNode = singleKnown(entries, 'dis', used, diagnostics, 'roki::link');
+  const minNode = singleKnown(entries, 'min', used, diagnostics, 'roki::link');
+  const maxNode = singleKnown(entries, 'max', used, diagnostics, 'roki::link');
+  const stiffnessNode = singleKnown(entries, 'stiffness', used, diagnostics, 'roki::link');
+  const viscosityNode =
+    singleKnown(entries, 'viscosity', used, diagnostics, 'roki::link') ??
+    singleKnown(entries, 'viscos', used, diagnostics, 'roki::link');
+  const coulombNode = singleKnown(entries, 'coulomb', used, diagnostics, 'roki::link');
+  const staticFrictionNode = singleKnown(
+    entries,
+    'staticfriction',
+    used,
+    diagnostics,
+    'roki::link',
+  );
+  const breakNode = singleKnown(entries, 'break', used, diagnostics, 'roki::link');
+  const motorNode = singleKnown(entries, 'motor', used, diagnostics, 'roki::link');
+  const forceThresholdNode = singleKnown(
+    entries,
+    'forcethreshold',
+    used,
+    diagnostics,
+    'roki::link',
+  );
+  const torqueThresholdNode = singleKnown(
+    entries,
+    'torquethreshold',
+    used,
+    diagnostics,
+    'roki::link',
+  );
+  const parentNode = singleKnown(entries, 'parent', used, diagnostics, 'roki::link');
+  const bindNode = singleKnown(entries, 'bind', used, diagnostics, 'roki::link');
   const shapeNodes = all(entries, 'shape');
-
-  markUsed(used, [
-    nameNode,
-    jointTypeNode,
-    massNode,
-    densityNode,
-    stuffNode,
-    comNode,
-    inertiaNode,
-    disNode,
-    minNode,
-    maxNode,
-    stiffnessNode,
-    viscosityNode,
-    coulombNode,
-    staticFrictionNode,
-    breakNode,
-    motorNode,
-    forceThresholdNode,
-    torqueThresholdNode,
-    parentNode,
-    bindNode,
-  ]);
   markUsed(used, shapeNodes);
 
   const jointType = parseText(jointTypeNode);
@@ -1535,23 +1563,13 @@ function parseOptic(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkOptic
   const entries = createEntries(section);
   const used = new Set<ZtkKeyValueNode>();
 
-  const nameNode = first(entries, 'name');
-  const ambientNode = first(entries, 'ambient');
-  const diffuseNode = first(entries, 'diffuse');
-  const specularNode = first(entries, 'specular');
-  const esrNode = first(entries, 'esr');
-  const shininessNode = first(entries, 'shininess');
-  const alphaNode = first(entries, 'alpha');
-
-  markUsed(used, [
-    nameNode,
-    ambientNode,
-    diffuseNode,
-    specularNode,
-    esrNode,
-    shininessNode,
-    alphaNode,
-  ]);
+  const nameNode = singleKnown(entries, 'name', used, diagnostics, 'zeo::optic');
+  const ambientNode = singleKnown(entries, 'ambient', used, diagnostics, 'zeo::optic');
+  const diffuseNode = singleKnown(entries, 'diffuse', used, diagnostics, 'zeo::optic');
+  const specularNode = singleKnown(entries, 'specular', used, diagnostics, 'zeo::optic');
+  const esrNode = singleKnown(entries, 'esr', used, diagnostics, 'zeo::optic');
+  const shininessNode = singleKnown(entries, 'shininess', used, diagnostics, 'zeo::optic');
+  const alphaNode = singleKnown(entries, 'alpha', used, diagnostics, 'zeo::optic');
 
   return {
     tag: 'zeo::optic',
@@ -1577,7 +1595,7 @@ function parseTextureCoord(
     return undefined;
   }
   if (values.length < 3) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-arity',
       message: `Expected 3 numbers but got ${values.length}`,
       tag,
@@ -1601,7 +1619,7 @@ function parseTextureFace(
     return undefined;
   }
   if (values.length < 3) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-arity',
       message: `Expected 3 numbers but got ${values.length}`,
       tag,
@@ -1618,16 +1636,24 @@ function parseTexture(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkTex
   const entries = createEntries(section);
   const used = new Set<ZtkKeyValueNode>();
 
-  const nameNode = first(entries, 'name');
-  const fileNode = first(entries, 'file');
-  const typeNode = first(entries, 'type');
-  const depthNode = first(entries, 'depth');
+  const nameNode = singleKnown(entries, 'name', used, diagnostics, 'zeo::texture');
+  const fileNode = singleKnown(entries, 'file', used, diagnostics, 'zeo::texture');
+  const typeNode = singleKnown(entries, 'type', used, diagnostics, 'zeo::texture');
+  const depthNode = singleKnown(entries, 'depth', used, diagnostics, 'zeo::texture');
   const coordNodes = all(entries, 'coord');
   const faceNodes = all(entries, 'face');
 
-  markUsed(used, [nameNode, fileNode, typeNode, depthNode]);
   markUsed(used, coordNodes);
   markUsed(used, faceNodes);
+
+  if (coordNodes.length === 0) {
+    pushDiagnostic(diagnostics, {
+      code: 'missing-required-key',
+      message: 'Texture requires at least one "coord" entry',
+      tag: 'zeo::texture',
+      key: 'coord',
+    });
+  }
 
   return {
     tag: 'zeo::texture',
@@ -1665,7 +1691,7 @@ function parseImport(
 
   const scale = Number(scaleToken);
   if (!Number.isFinite(scale)) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-number',
       message: `Could not parse number "${scaleToken}"`,
       tag,
@@ -1896,15 +1922,13 @@ function parseShape(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkShape
   const entries = createEntries(section);
   const used = new Set<ZtkKeyValueNode>();
 
-  const nameNode = first(entries, 'name');
-  const typeNode = first(entries, 'type');
-  const opticNode = first(entries, 'optic');
-  const textureNode = first(entries, 'texture');
-  const mirrorNode = first(entries, 'mirror');
-  const importNode = first(entries, 'import');
+  const nameNode = singleKnown(entries, 'name', used, diagnostics, 'zeo::shape');
+  const typeNode = singleKnown(entries, 'type', used, diagnostics, 'zeo::shape');
+  const opticNode = singleKnown(entries, 'optic', used, diagnostics, 'zeo::shape');
+  const textureNode = singleKnown(entries, 'texture', used, diagnostics, 'zeo::shape');
+  const mirrorNode = singleKnown(entries, 'mirror', used, diagnostics, 'zeo::shape');
+  const importNode = singleKnown(entries, 'import', used, diagnostics, 'zeo::shape');
   const parsedImport = parseImport(importNode, diagnostics, 'zeo::shape');
-
-  markUsed(used, [nameNode, typeNode, opticNode, textureNode, mirrorNode, importNode]);
 
   const type = parseText(typeNode);
   const mirrorName = mirrorNode?.values[0];
@@ -1939,7 +1963,7 @@ function parseMapTerraGrid(
     return undefined;
   }
   if (values.length < 8) {
-    diagnostics.push({
+    pushDiagnostic(diagnostics, {
       code: 'invalid-arity',
       message: `Expected 8 numbers but got ${values.length}`,
       tag,
@@ -1968,20 +1992,18 @@ function parsePair(
 function parseMap(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkMap {
   const entries = createEntries(section);
   const used = new Set<ZtkKeyValueNode>();
-  const nameNode = first(entries, 'name');
-  const typeNode = first(entries, 'type');
-  const originNode = first(entries, 'origin');
-  const resolutionNode = first(entries, 'resolution');
-  const sizeNode = first(entries, 'size');
-  const zrangeNode = first(entries, 'zrange');
-  const thVarNode = first(entries, 'th_var');
-  const thGridNode = first(entries, 'th_grd');
-  const thResNode = first(entries, 'th_res');
+  const nameNode = singleKnown(entries, 'name', used, diagnostics, 'zeo::map');
+  const typeNode = singleKnown(entries, 'type', used, diagnostics, 'zeo::map');
+  const originNode = singleKnown(entries, 'origin', used, diagnostics, 'zeo::map');
+  const resolutionNode = singleKnown(entries, 'resolution', used, diagnostics, 'zeo::map');
+  const sizeNode = singleKnown(entries, 'size', used, diagnostics, 'zeo::map');
+  const zrangeNode = singleKnown(entries, 'zrange', used, diagnostics, 'zeo::map');
+  const thVarNode = singleKnown(entries, 'th_var', used, diagnostics, 'zeo::map');
+  const thGridNode = singleKnown(entries, 'th_grd', used, diagnostics, 'zeo::map');
+  const thResNode = singleKnown(entries, 'th_res', used, diagnostics, 'zeo::map');
   const gridNodes = all(entries, 'grid');
   const type = parseText(typeNode);
 
-  markUsed(used, [nameNode, typeNode, originNode, resolutionNode, sizeNode, zrangeNode]);
-  markUsed(used, [thVarNode, thGridNode, thResNode]);
   markUsed(used, gridNodes);
 
   return {
@@ -2018,7 +2040,7 @@ function indexByName<T extends { name?: string; tag: string }>(
       continue;
     }
     if (map.has(value.name)) {
-      diagnostics.push({
+      pushDiagnostic(diagnostics, {
         code: 'duplicate-name',
         message: `Duplicate ${value.tag} name "${value.name}"`,
         tag: value.tag,
@@ -2051,7 +2073,7 @@ function resolveLinks(
       link.motor = motorMap.get(link.motorName);
       link.joint.motor = link.motor;
       if (!link.motor) {
-        diagnostics.push({
+        pushDiagnostic(diagnostics, {
           code: 'unresolved-reference',
           message: `Link "${link.name ?? '(unnamed)'}" references missing motor "${link.motorName}"`,
           tag: link.tag,
@@ -2063,7 +2085,7 @@ function resolveLinks(
     for (const shapeName of link.shapeNames) {
       const shape = shapeMap.get(shapeName);
       if (!shape) {
-        diagnostics.push({
+        pushDiagnostic(diagnostics, {
           code: 'unresolved-reference',
           message: `Link "${link.name ?? '(unnamed)'}" references missing shape "${shapeName}"`,
           tag: link.tag,
@@ -2077,7 +2099,7 @@ function resolveLinks(
     if (link.parentName) {
       link.parent = linkMap.get(link.parentName);
       if (!link.parent) {
-        diagnostics.push({
+        pushDiagnostic(diagnostics, {
           code: 'unresolved-reference',
           message: `Link "${link.name ?? '(unnamed)'}" references missing parent "${link.parentName}"`,
           tag: link.tag,
@@ -2091,7 +2113,7 @@ function resolveLinks(
     if (link.bindName) {
       link.bind = linkMap.get(link.bindName);
       if (!link.bind) {
-        diagnostics.push({
+        pushDiagnostic(diagnostics, {
           code: 'unresolved-reference',
           message: `Link "${link.name ?? '(unnamed)'}" references missing bind "${link.bindName}"`,
           tag: link.tag,
@@ -2119,7 +2141,7 @@ function resolveChainInit(
 
     jointState.link = linkMap.get(jointState.linkName);
     if (!jointState.link) {
-      diagnostics.push({
+      pushDiagnostic(diagnostics, {
         code: 'unresolved-reference',
         message: `Chain init references missing link "${jointState.linkName}"`,
         tag: 'roki::chain::init',
@@ -2145,7 +2167,7 @@ function resolveChainIk(
     }
     joint.link = linkMap.get(joint.selector);
     if (!joint.link) {
-      diagnostics.push({
+      pushDiagnostic(diagnostics, {
         code: 'unresolved-reference',
         message: `Chain IK references missing link "${joint.selector}"`,
         tag: 'roki::chain::ik',
@@ -2159,7 +2181,7 @@ function resolveChainIk(
     for (const linkName of constraint.linkNames) {
       const link = linkMap.get(linkName);
       if (!link) {
-        diagnostics.push({
+        pushDiagnostic(diagnostics, {
           code: 'unresolved-reference',
           message: `Chain IK constraint "${constraint.name ?? '(unnamed)'}" references missing link "${linkName}"`,
           tag: 'roki::chain::ik',
@@ -2169,6 +2191,27 @@ function resolveChainIk(
       }
       constraint.links.push(link);
     }
+  }
+}
+
+function resolveContacts(contacts: ZtkContact[], diagnostics: ZtkDiagnostic[]): void {
+  const pairMap = new Map<string, ZtkContact>();
+  for (const contact of contacts) {
+    if (!contact.bind) {
+      continue;
+    }
+    const pairKey = [...contact.bind].sort().join('\0');
+    const previous = pairMap.get(pairKey);
+    if (previous) {
+      pushDiagnostic(diagnostics, {
+        code: 'duplicate-contact-bind',
+        message: `Duplicate contact bind "${contact.bind[0]} ${contact.bind[1]}"`,
+        tag: 'roki::contact',
+        key: 'bind',
+      });
+      continue;
+    }
+    pairMap.set(pairKey, contact);
   }
 }
 
@@ -2185,7 +2228,7 @@ function resolveShapes(
     if (shape.opticName) {
       shape.optic = opticMap.get(shape.opticName);
       if (!shape.optic) {
-        diagnostics.push({
+        pushDiagnostic(diagnostics, {
           code: 'unresolved-reference',
           message: `Shape "${shape.name ?? '(unnamed)'}" references missing optic "${shape.opticName}"`,
           tag: shape.tag,
@@ -2197,7 +2240,7 @@ function resolveShapes(
     if (shape.textureName) {
       shape.texture = textureMap.get(shape.textureName);
       if (!shape.texture) {
-        diagnostics.push({
+        pushDiagnostic(diagnostics, {
           code: 'unresolved-reference',
           message: `Shape "${shape.name ?? '(unnamed)'}" references missing texture "${shape.textureName}"`,
           tag: shape.tag,
@@ -2209,7 +2252,7 @@ function resolveShapes(
     if (shape.mirrorName) {
       shape.mirror = shapeMap.get(shape.mirrorName);
       if (!shape.mirror) {
-        diagnostics.push({
+        pushDiagnostic(diagnostics, {
           code: 'unresolved-reference',
           message: `Shape "${shape.name ?? '(unnamed)'}" references missing mirror source "${shape.mirrorName}"`,
           tag: shape.tag,
@@ -2278,6 +2321,7 @@ export function resolveZtk(document: ZtkDocument): ZtkSemanticDocument {
   resolveLinks(model.links, model.shapes, model.motors, diagnostics);
   resolveChainInit(model.chainInit, model.links, diagnostics);
   resolveChainIk(model.chainIk, model.links, diagnostics);
+  resolveContacts(model.contacts, diagnostics);
 
   return model;
 }

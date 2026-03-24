@@ -1,6 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { parseZtk, resolveZtk, semanticToAst, serializeZtkNormalized } from '../src/index.js';
+import {
+  parseZtk,
+  resolveZtk,
+  semanticToAst,
+  serializeSemanticZtkNormalized,
+  serializeZtkNormalized,
+} from '../src/index.js';
 
 type CorpusCase = {
   name: string;
@@ -10,6 +16,18 @@ type CorpusCase = {
 
 function fixturePath(relativePath: string): URL {
   return new URL(`./fixtures/corpus/${relativePath}`, import.meta.url);
+}
+
+function countDiagnosticsByCode(
+  diagnostics: ReadonlyArray<{ code: string }>,
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+
+  for (const diagnostic of diagnostics) {
+    counts[diagnostic.code] = (counts[diagnostic.code] ?? 0) + 1;
+  }
+
+  return counts;
 }
 
 const corpusCases: CorpusCase[] = [
@@ -175,6 +193,32 @@ const corpusCases: CorpusCase[] = [
   },
 ];
 
+const corpusNormalizedPolicyExpectations: Record<string, Record<string, number>> = {
+  'roki/arm.ztk': {
+    'drops-source-comments': 1,
+  },
+  'roki/box.ztk': {},
+  'roki/dualarm.ztk': {
+    'drops-source-comments': 1,
+    'normalizes-chain-init-joint-key': 2,
+  },
+  'roki/invpend.ztk': {
+    'normalizes-key-alias': 2,
+  },
+  'roki/puma.ztk': {
+    'drops-source-comments': 1,
+    'normalizes-transform-to-frame': 6,
+  },
+  'roki/wall.ztk': {},
+  'zeo/box.ztk': {},
+  'zeo/ellips.ztk': {},
+  'zeo/mirror.ztk': {
+    'drops-source-comments': 1,
+  },
+  'zeo/nurbs.ztk': {},
+  'zeo/scc.ztk': {},
+};
+
 describe('ztk corpus regression', () => {
   for (const corpusCase of corpusCases) {
     test(`resolves ${corpusCase.name}`, () => {
@@ -190,6 +234,31 @@ describe('ztk corpus regression', () => {
       const regenerated = resolveZtk(parseZtk(serializeZtkNormalized(semanticToAst(original))));
 
       corpusCase.verify(regenerated);
+    });
+
+    test(`semantic-normalized save/reload preserves ${corpusCase.name} without new validation failures`, () => {
+      const source = readFileSync(corpusCase.path, 'utf8');
+      const original = resolveZtk(parseZtk(source));
+      const serialized = serializeSemanticZtkNormalized(original);
+      const regenerated = resolveZtk(parseZtk(serialized.text));
+
+      expect(regenerated.diagnostics).toEqual([]);
+      corpusCase.verify(regenerated);
+    });
+  }
+
+  for (const [relativePath, expectedDiagnostics] of Object.entries(
+    corpusNormalizedPolicyExpectations,
+  )) {
+    test(`tracks normalized policy diagnostics for ${relativePath}`, () => {
+      const source = readFileSync(fixturePath(relativePath), 'utf8');
+      const model = resolveZtk(parseZtk(source));
+      const serialized = serializeSemanticZtkNormalized(model);
+
+      expect(countDiagnosticsByCode(serialized.diagnostics)).toEqual(expectedDiagnostics);
+      expect(
+        serialized.diagnostics.every((diagnostic) => diagnostic.kind === 'serialization-policy'),
+      ).toBe(true);
     });
   }
 });

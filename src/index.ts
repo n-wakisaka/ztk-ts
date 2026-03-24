@@ -8,6 +8,12 @@ export type {
   ZtkTagNode,
 } from './ast.js';
 export { createDocument, getSections } from './ast.js';
+export type {
+  ZtkDiagnostic,
+  ZtkSerializationDiagnostic,
+  ZtkValidationDiagnostic,
+} from './diagnostics.js';
+export { createSerializationDiagnostic, createValidationDiagnostic } from './diagnostics.js';
 export { parseZtk } from './parse.js';
 export type {
   ZtkAutoOrMat3,
@@ -18,7 +24,6 @@ export type {
   ZtkChainInitJointState,
   ZtkContact,
   ZtkContactType,
-  ZtkDiagnostic,
   ZtkIkConstraint,
   ZtkIkConstraintType,
   ZtkIkJoint,
@@ -50,5 +55,15 @@ export type {
 } from './semantic.js';
 export { resolveZtk } from './semantic.js';
 export { semanticToAst } from './semantic-ast.js';
+export type {
+  ZtkNormalizedSemanticSerialization,
+  ZtkSemanticSerializationLayer,
+  ZtkSourcePreservingSemanticSerialization,
+} from './semantic-serialize.js';
+export {
+  collectNormalizedSemanticSerializationDiagnostics,
+  serializeSemanticZtkNormalized,
+  serializeSemanticZtkPreservingSource,
+} from './semantic-serialize.js';
 export { serializeZtk, serializeZtkNormalized } from './serialize.js';
 export { tokenizeValue } from './tokenize.js';

@@ -22,6 +22,12 @@ import type {
 } from './semantic.js';
 import { tokenizeValue } from './tokenize.js';
 
+export type ZtkSemanticAstOptions = {
+  normalizeLinkJointKeys?: boolean;
+  normalizeShapeSource?: boolean;
+  normalizeTransforms?: boolean;
+};
+
 function cloneKeyValueNode(node: ZtkKeyValueNode): ZtkKeyValueNode {
   return {
     type: 'keyValue',
@@ -92,7 +98,30 @@ function pushKeyValue(nodes: ZtkNode[], key: string, rawValue: string | undefine
   }
 }
 
-function pushTransform(nodes: ZtkNode[], transform: ZtkTransform): void {
+function hasRawTransform(transform: ZtkTransform): boolean {
+  return (
+    transform.pos !== undefined ||
+    transform.att !== undefined ||
+    transform.frame !== undefined ||
+    transform.dh !== undefined ||
+    transform.rotations.length > 0
+  );
+}
+
+function pushTransform(
+  nodes: ZtkNode[],
+  transform: ZtkTransform,
+  options?: ZtkSemanticAstOptions,
+): void {
+  if (options?.normalizeTransforms) {
+    if (!hasRawTransform(transform)) {
+      return;
+    }
+
+    pushKeyValue(nodes, 'frame', formatMat3x4(transform.resolved.frame));
+    return;
+  }
+
   if (transform.pos) {
     pushKeyValue(nodes, 'pos', formatVec3(transform.pos));
   }
@@ -135,13 +164,16 @@ function formatJointState(jointState: ZtkChainInitJointState): string {
   return formatNumberList(jointState.values);
 }
 
-function renderChainInit(chainInit: ZtkChainInit | undefined): ZtkNode[] {
+function renderChainInit(
+  chainInit: ZtkChainInit | undefined,
+  options?: ZtkSemanticAstOptions,
+): ZtkNode[] {
   if (!chainInit) {
     return [];
   }
 
   const nodes: ZtkNode[] = [createTagNode(chainInit.tag)];
-  pushTransform(nodes, chainInit.transform);
+  pushTransform(nodes, chainInit.transform, options);
 
   if (chainInit.jointStates.length > 0) {
     for (const jointState of chainInit.jointStates) {
@@ -301,7 +333,9 @@ function renderTexture(texture: ZtkTexture): ZtkNode[] {
   pushKeyValue(
     nodes,
     'depth',
-    texture.depth !== undefined ? formatNumber(texture.depth) : undefined,
+    texture.type === 'bump' && texture.depth !== undefined
+      ? formatNumber(texture.depth)
+      : undefined,
   );
   for (const coord of texture.coords) {
     pushKeyValue(nodes, 'coord', formatNumberList([coord.index, ...coord.uv]));
@@ -313,21 +347,35 @@ function renderTexture(texture: ZtkTexture): ZtkNode[] {
   return nodes;
 }
 
-function renderShape(shape: ZtkShape): ZtkNode[] {
+function renderShape(shape: ZtkShape, options?: ZtkSemanticAstOptions): ZtkNode[] {
   const nodes: ZtkNode[] = [createTagNode(shape.tag)];
+  const activeShapeSource: 'preserve' | 'mirror' | 'import' | 'geometry' =
+    options?.normalizeShapeSource
+      ? shape.mirrorName
+        ? 'mirror'
+        : shape.importName
+          ? 'import'
+          : 'geometry'
+      : 'preserve';
   pushKeyValue(nodes, 'name', shape.name);
-  pushKeyValue(nodes, 'type', shape.type);
+  pushKeyValue(
+    nodes,
+    'type',
+    activeShapeSource === 'preserve' || activeShapeSource === 'geometry' ? shape.type : undefined,
+  );
   pushKeyValue(nodes, 'optic', shape.opticName);
   pushKeyValue(nodes, 'texture', shape.textureName);
   pushKeyValue(
     nodes,
     'mirror',
-    shape.mirrorName ? [shape.mirrorName, shape.mirrorAxis].filter(Boolean).join(' ') : undefined,
+    (activeShapeSource === 'preserve' || activeShapeSource === 'mirror') && shape.mirrorName
+      ? [shape.mirrorName, shape.mirrorAxis].filter(Boolean).join(' ')
+      : undefined,
   );
   pushKeyValue(
     nodes,
     'import',
-    shape.importName
+    (activeShapeSource === 'preserve' || activeShapeSource === 'import') && shape.importName
       ? [
           shape.importName,
           shape.importScale !== undefined ? formatNumber(shape.importScale) : undefined,
@@ -336,8 +384,13 @@ function renderShape(shape: ZtkShape): ZtkNode[] {
           .join(' ')
       : undefined,
   );
-  pushTransform(nodes, shape.transform);
+  pushTransform(nodes, shape.transform, options);
   const geometry = shape.geometry;
+
+  if (activeShapeSource !== 'preserve' && activeShapeSource !== 'geometry') {
+    nodes.push(...shape.unknownKeys.map(cloneKeyValueNode));
+    return nodes;
+  }
 
   if (isGeometryType(geometry, 'box')) {
     pushKeyValue(nodes, 'center', geometry.center ? formatVec3(geometry.center) : undefined);
@@ -524,8 +577,51 @@ function renderMap(map: ZtkMap): ZtkNode[] {
   return nodes;
 }
 
-function renderLink(link: ZtkLink): ZtkNode[] {
+function isAllowedLinkJointKey(link: ZtkLink, key: string): boolean {
+  switch (link.joint.baseType) {
+    case 'fixed':
+      return false;
+    case 'revolute':
+    case 'prismatic':
+      return (
+        key === 'dis' ||
+        key === 'min' ||
+        key === 'max' ||
+        key === 'stiffness' ||
+        key === 'viscosity' ||
+        key === 'coulomb' ||
+        key === 'staticfriction' ||
+        key === 'motor'
+      );
+    case 'cylindrical':
+    case 'hooke':
+      return (
+        key === 'dis' ||
+        key === 'min' ||
+        key === 'max' ||
+        key === 'stiffness' ||
+        key === 'viscosity' ||
+        key === 'coulomb' ||
+        key === 'staticfriction'
+      );
+    case 'spherical':
+      return key === 'dis' || key === 'motor';
+    case 'planar':
+    case 'float':
+      return key === 'dis';
+    case 'breakablefloat':
+      return (
+        key === 'dis' || key === 'break' || key === 'forcethreshold' || key === 'torquethreshold'
+      );
+    default:
+      return true;
+  }
+}
+
+function renderLink(link: ZtkLink, options?: ZtkSemanticAstOptions): ZtkNode[] {
   const nodes: ZtkNode[] = [createTagNode(link.tag)];
+  const shouldEmitJointKey = (key: string): boolean =>
+    !options?.normalizeLinkJointKeys || isAllowedLinkJointKey(link, key);
   pushKeyValue(nodes, 'name', link.name);
   pushKeyValue(nodes, 'jointtype', link.jointType);
   pushKeyValue(nodes, 'mass', link.mass !== undefined ? formatNumber(link.mass) : undefined);
@@ -537,42 +633,72 @@ function renderLink(link: ZtkLink): ZtkNode[] {
   pushKeyValue(nodes, 'stuff', link.stuff);
   pushKeyValue(nodes, 'COM', link.com ? formatVec3OrAuto(link.com) : undefined);
   pushKeyValue(nodes, 'inertia', link.inertia ? formatMat3OrAuto(link.inertia) : undefined);
-  pushTransform(nodes, link.transform);
-  pushKeyValue(nodes, 'dis', link.dis ? formatNumberList(link.dis) : undefined);
-  pushKeyValue(nodes, 'break', link.breakValues ? formatNumberList(link.breakValues) : undefined);
-  pushKeyValue(nodes, 'min', link.min !== undefined ? formatNumber(link.min) : undefined);
-  pushKeyValue(nodes, 'max', link.max !== undefined ? formatNumber(link.max) : undefined);
+  pushTransform(nodes, link.transform, options);
+  pushKeyValue(
+    nodes,
+    'dis',
+    shouldEmitJointKey('dis') && link.dis ? formatNumberList(link.dis) : undefined,
+  );
+  pushKeyValue(
+    nodes,
+    'break',
+    shouldEmitJointKey('break') && link.breakValues
+      ? formatNumberList(link.breakValues)
+      : undefined,
+  );
+  pushKeyValue(
+    nodes,
+    'min',
+    shouldEmitJointKey('min') && link.min !== undefined ? formatNumber(link.min) : undefined,
+  );
+  pushKeyValue(
+    nodes,
+    'max',
+    shouldEmitJointKey('max') && link.max !== undefined ? formatNumber(link.max) : undefined,
+  );
   pushKeyValue(
     nodes,
     'stiffness',
-    link.stiffness !== undefined ? formatNumber(link.stiffness) : undefined,
+    shouldEmitJointKey('stiffness') && link.stiffness !== undefined
+      ? formatNumber(link.stiffness)
+      : undefined,
   );
   pushKeyValue(
     nodes,
     'viscosity',
-    link.viscosity !== undefined ? formatNumber(link.viscosity) : undefined,
+    shouldEmitJointKey('viscosity') && link.viscosity !== undefined
+      ? formatNumber(link.viscosity)
+      : undefined,
   );
   pushKeyValue(
     nodes,
     'coulomb',
-    link.coulomb !== undefined ? formatNumber(link.coulomb) : undefined,
+    shouldEmitJointKey('coulomb') && link.coulomb !== undefined
+      ? formatNumber(link.coulomb)
+      : undefined,
   );
   pushKeyValue(
     nodes,
     'staticfriction',
-    link.staticFriction !== undefined ? formatNumber(link.staticFriction) : undefined,
+    shouldEmitJointKey('staticfriction') && link.staticFriction !== undefined
+      ? formatNumber(link.staticFriction)
+      : undefined,
   );
   pushKeyValue(
     nodes,
     'forcethreshold',
-    link.forceThreshold !== undefined ? formatNumber(link.forceThreshold) : undefined,
+    shouldEmitJointKey('forcethreshold') && link.forceThreshold !== undefined
+      ? formatNumber(link.forceThreshold)
+      : undefined,
   );
   pushKeyValue(
     nodes,
     'torquethreshold',
-    link.torqueThreshold !== undefined ? formatNumber(link.torqueThreshold) : undefined,
+    shouldEmitJointKey('torquethreshold') && link.torqueThreshold !== undefined
+      ? formatNumber(link.torqueThreshold)
+      : undefined,
   );
-  pushKeyValue(nodes, 'motor', link.motorName);
+  pushKeyValue(nodes, 'motor', shouldEmitJointKey('motor') ? link.motorName : undefined);
   for (const shapeName of link.shapeNames) {
     pushKeyValue(nodes, 'shape', shapeName);
   }
@@ -591,17 +717,20 @@ function renderUnknownSection(section: ZtkSemanticDocument['unknownSections'][nu
   return nodes;
 }
 
-export function semanticToAst(document: ZtkSemanticDocument): ZtkDocument {
+export function semanticToAst(
+  document: ZtkSemanticDocument,
+  options?: ZtkSemanticAstOptions,
+): ZtkDocument {
   const nodes: ZtkNode[] = [];
   const groups = [
     renderChain(document.chain),
     ...document.optics.map(renderOptic),
     ...document.textures.map(renderTexture),
-    ...document.shapes.map(renderShape),
+    ...document.shapes.map((shape) => renderShape(shape, options)),
     ...document.motors.map(renderMotor),
     ...document.contacts.map(renderContact),
-    ...document.links.map(renderLink),
-    renderChainInit(document.chainInit),
+    ...document.links.map((link) => renderLink(link, options)),
+    renderChainInit(document.chainInit, options),
     renderChainIk(document.chainIk),
     ...document.maps.map(renderMap),
     ...document.unknownSections.map(renderUnknownSection),

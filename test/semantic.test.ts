@@ -84,6 +84,20 @@ describe('resolveZtk', () => {
     }
   });
 
+  test('marks resolver diagnostics as validation diagnostics', () => {
+    const model = resolveZtk(
+      parseZtk(`
+[zeo::texture]
+name: tex0
+`),
+    );
+
+    expect(model.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual(['validation']);
+    expect(model.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'missing-required-key',
+    ]);
+  });
+
   test('keeps unknown keys and reports unresolved references', () => {
     const model = resolveZtk(
       parseZtk(`
@@ -654,6 +668,38 @@ compensation: 50
         contactType: 'rigid',
         unknownKeys: [],
       },
+    ]);
+  });
+
+  test('emits validation diagnostics for missing texture coords and repeated known keys', () => {
+    const model = resolveZtk(
+      parseZtk(`
+[zeo::texture]
+name: tex0
+name: tex1
+file: checker.png
+depth: 0.1
+depth: 0.2
+
+[roki::contact]
+bind: rubber steel
+compensation: 100
+
+[roki::contact]
+bind: steel rubber
+elasticity: 500
+`),
+    );
+
+    expect(model.textures[0].name).toBe('tex0');
+    expect(model.textures[0].depth).toBe(0.1);
+    expect(model.textures[0].unknownKeys).toEqual([]);
+    expect(model.contacts).toHaveLength(2);
+    expect(model.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'repeated-key-overflow',
+      'repeated-key-overflow',
+      'missing-required-key',
+      'duplicate-contact-bind',
     ]);
   });
 });

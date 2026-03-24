@@ -204,7 +204,7 @@ semantic model の最初の実装は `P1` を優先するのが妥当です。
 - `coord` と `face` は repeated key
 - upstream 実装では `coord` が 1 件も無い texture は warning 扱いで読めない
 - `type` は `color` / `bump` を確認
-- `depth` は `bump` のときだけ出力される
+- `depth` は semantic では保持しても、normalized serializer では `bump` のときだけ出力する
 - `ztk-ts` では `coord` を `{ index, uv }`、`face` を index triple として semantic 化している
 
 ## `roki::chain::ik`

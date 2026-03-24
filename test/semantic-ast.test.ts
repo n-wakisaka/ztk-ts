@@ -1,6 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
-import { parseZtk, resolveZtk, semanticToAst, serializeZtkNormalized } from '../src/index.js';
+import {
+  parseZtk,
+  resolveZtk,
+  semanticToAst,
+  serializeSemanticZtkNormalized,
+  serializeSemanticZtkPreservingSource,
+  serializeZtkNormalized,
+} from '../src/index.js';
 
 describe('semanticToAst', () => {
   test('round-trips the semantic model for the arm sample', () => {
@@ -379,5 +386,336 @@ viscosity: 5
         unknownKeys: [],
       },
     ]);
+  });
+
+  test('reports normalized serialization policy decisions', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+% comment
+orphan: 1
+
+[zeo::texture]
+name: tex0
+type: color
+depth: 0.03
+coord: 0 0 0
+
+[roki::link]
+name: arm
+jointtype: revolute
+viscos: 0
+
+[roki::chain::init]
+arm: 1.5 0 0
+
+[roki::contact]
+bind: rubber steel
+compensation: 100
+relaxation: 0.3
+elasticity: 500
+viscosity: 5
+`),
+    );
+
+    const serialized = serializeSemanticZtkNormalized(semantic);
+
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.kind)).toEqual([
+      'serialization-policy',
+      'serialization-policy',
+      'serialization-policy',
+      'serialization-policy',
+      'serialization-policy',
+      'serialization-policy',
+      'serialization-policy',
+    ]);
+    expect(serialized.text).toContain('type: color');
+    expect(serialized.text).not.toContain('depth: 0.03');
+    expect(serialized.text).toContain('viscosity: 0');
+    expect(serialized.text).toContain('joint: arm 1.5 0 0');
+    expect(serialized.text).not.toContain('compensation: 100');
+    expect(serialized.text).not.toContain('relaxation: 0.3');
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'drops-source-comments',
+      'drops-tagless-keyvalue',
+      'normalizes-chain-init-joint-key',
+      'normalizes-key-alias',
+      'drops-inactive-contact-key',
+      'drops-inactive-contact-key',
+      'drops-nonbump-texture-depth',
+    ]);
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.effect)).toEqual([
+      'source-loss',
+      'source-loss',
+      'canonicalization',
+      'canonicalization',
+      'source-loss',
+      'source-loss',
+      'source-loss',
+    ]);
+  });
+
+  test('keeps source-preserving save separate from normalized semantic save', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+% comment
+orphan: 1
+
+[zeo::shape]
+name: mirrored
+mirror: source y
+type: sphere
+radius: 0.5
+`),
+    );
+
+    const preserved = serializeSemanticZtkPreservingSource(semantic);
+    const normalized = serializeSemanticZtkNormalized(semantic);
+
+    expect(preserved.layer).toBe('preserve-source');
+    expect(preserved.diagnostics).toEqual([]);
+    expect(preserved.text).toContain('% comment');
+    expect(preserved.text).toContain('orphan: 1');
+    expect(preserved.text).toContain('type: sphere');
+    expect(preserved.text).toContain('radius: 0.5');
+
+    expect(normalized.layer).toBe('normalize-semantic');
+    expect(normalized.text).not.toContain('% comment');
+    expect(normalized.text).not.toContain('type: sphere');
+    expect(normalized.text).not.toContain('radius: 0.5');
+    expect(normalized.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
+      'drops-inactive-shape-key',
+    );
+  });
+
+  test('normalizes source-order-sensitive transforms to canonical frame output', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[roki::link]
+name: frame-link
+jointtype: fixed
+rot: 0 0 1 90
+frame: {
+ 0, 1, 0, 1
+ 0, 0, 1, 2
+ 1, 0, 0, 3
+}
+rot: 0 1 0 90
+
+[zeo::shape]
+name: transformed-shape
+type: sphere
+pos: 1 2 3
+rot: 0 0 1 90
+radius: 0.5
+`),
+    );
+
+    const serialized = serializeSemanticZtkNormalized(semantic);
+    const reparsed = resolveZtk(parseZtk(serialized.text));
+
+    expect(serialized.text).toContain('[roki::link]');
+    expect(serialized.text).toContain('[zeo::shape]');
+    expect(serialized.text.match(/frame:/g)).toHaveLength(2);
+    expect(serialized.text).not.toContain('rot: 0 0 1 90');
+    expect(serialized.text).not.toContain('pos: 1 2 3');
+    expect(reparsed.links[0]?.transform.resolved.frame).toEqual(
+      semantic.links[0]?.transform.resolved.frame,
+    );
+    expect(reparsed.shapes[0]?.transform.resolved.frame).toEqual(
+      semantic.shapes[0]?.transform.resolved.frame,
+    );
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'normalizes-transform-to-frame',
+      'normalizes-transform-to-frame',
+    ]);
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.effect)).toEqual([
+      'canonicalization',
+      'canonicalization',
+    ]);
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.tag)).toEqual([
+      'roki::link',
+      'zeo::shape',
+    ]);
+  });
+
+  test('drops joint keys that are inactive for the normalized link joint type', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[roki::motor]
+name: servo
+type: dc
+
+[roki::link]
+name: base
+jointtype: fixed
+dis: 1
+min: -1
+motor: servo
+
+[roki::link]
+name: plate
+jointtype: planar
+dis: 1 2 3
+stiffness: 10
+viscosity: 2
+`),
+    );
+
+    const serialized = serializeSemanticZtkNormalized(semantic);
+    const reparsed = resolveZtk(parseZtk(serialized.text));
+
+    expect(serialized.text).toContain('jointtype: fixed');
+    expect(serialized.text).toContain('jointtype: planar');
+    expect(serialized.text).toContain('dis: 1 2 3');
+    expect(serialized.text).not.toContain('min: -1');
+    expect(serialized.text).not.toContain('motor: servo');
+    expect(serialized.text).not.toContain('stiffness: 10');
+    expect(serialized.text).not.toContain('viscosity: 2');
+    expect(reparsed.links[0]?.joint.displacement).toBeUndefined();
+    expect(reparsed.links[0]?.joint.min).toBeUndefined();
+    expect(reparsed.links[0]?.joint.motorName).toBeUndefined();
+    expect(reparsed.links[1]?.joint.displacement).toEqual([1, 2, 3]);
+    expect(reparsed.links[1]?.joint.stiffness).toBeUndefined();
+    expect(reparsed.links[1]?.joint.viscosity).toBeUndefined();
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'drops-inactive-link-joint-key',
+      'drops-inactive-link-joint-key',
+      'drops-inactive-link-joint-key',
+      'drops-inactive-link-joint-key',
+      'drops-inactive-link-joint-key',
+    ]);
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.key)).toEqual([
+      'dis',
+      'min',
+      'motor',
+      'stiffness',
+      'viscosity',
+    ]);
+  });
+
+  test('normalizes shape source to mirror or import over type-specific geometry', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: source
+type: cone
+center: 0 0 0
+vert: 0 0 1
+radius: 0.3
+
+[zeo::shape]
+name: mirrored
+mirror: source y
+import: ignored.stl 2
+type: sphere
+center: 1 2 3
+radius: 0.5
+
+[zeo::shape]
+name: imported
+import: mesh.stl 1.5
+type: sphere
+center: 4 5 6
+radius: 0.7
+`),
+    );
+
+    const serialized = serializeSemanticZtkNormalized(semantic);
+    const reparsed = resolveZtk(parseZtk(serialized.text));
+
+    expect(serialized.text).toContain('mirror: source y');
+    expect(serialized.text).toContain('import: mesh.stl 1.5');
+    expect(serialized.text).not.toContain('import: ignored.stl 2');
+    expect(serialized.text).not.toContain('type: sphere');
+    expect(serialized.text).not.toContain('center: 1 2 3');
+    expect(serialized.text).not.toContain('radius: 0.5');
+    expect(serialized.text).not.toContain('center: 4 5 6');
+    expect(serialized.text).not.toContain('radius: 0.7');
+    expect(reparsed.shapes[1]?.mirrorName).toBe('source');
+    expect(reparsed.shapes[1]?.importName).toBeUndefined();
+    expect(reparsed.shapes[1]?.type).toBeUndefined();
+    expect(reparsed.shapes[2]?.importName).toBe('mesh.stl');
+    expect(reparsed.shapes[2]?.importScale).toBe(1.5);
+    expect(reparsed.shapes[2]?.type).toBeUndefined();
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'drops-inactive-shape-key',
+      'drops-inactive-shape-key',
+      'drops-inactive-shape-key',
+      'drops-inactive-shape-key',
+      'drops-inactive-shape-key',
+      'drops-inactive-shape-key',
+      'drops-inactive-shape-key',
+    ]);
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.key)).toEqual([
+      'import',
+      'type',
+      'center',
+      'radius',
+      'type',
+      'center',
+      'radius',
+    ]);
+  });
+
+  test('retains shape optic texture and transform while pruning inactive source keys', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::texture]
+name: tex0
+type: bump
+depth: 0.1
+coord: 0 0 0
+
+[zeo::shape]
+name: source
+type: cone
+center: 0 0 0
+vert: 0 0 1
+radius: 0.3
+
+[zeo::shape]
+name: mirrored
+texture: tex0
+mirror: source y
+type: sphere
+center: 1 2 3
+radius: 0.5
+pos: 1 2 3
+rot: 0 0 1 90
+
+[zeo::shape]
+name: imported
+optic: metal
+import: mesh.stl 2
+type: sphere
+center: 4 5 6
+radius: 0.7
+frame: {
+ 1, 0, 0, 7
+ 0, 1, 0, 8
+ 0, 0, 1, 9
+}
+`),
+    );
+
+    const serialized = serializeSemanticZtkNormalized(semantic);
+    const reparsed = resolveZtk(parseZtk(serialized.text));
+
+    expect(serialized.text).toContain('texture: tex0');
+    expect(serialized.text).toContain('optic: metal');
+    expect(serialized.text).toContain('mirror: source y');
+    expect(serialized.text).toContain('import: mesh.stl 2');
+    expect(serialized.text.match(/frame:/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(reparsed.shapes[1]?.textureName).toBe('tex0');
+    expect(reparsed.shapes[1]?.mirrorName).toBe('source');
+    expect(reparsed.shapes[1]?.transform.resolved.frame).toEqual(
+      semantic.shapes[1]?.transform.resolved.frame,
+    );
+    expect(reparsed.shapes[2]?.opticName).toBe('metal');
+    expect(reparsed.shapes[2]?.importName).toBe('mesh.stl');
+    expect(reparsed.shapes[2]?.importScale).toBe(2);
+    expect(reparsed.shapes[2]?.transform.resolved.frame).toEqual(
+      semantic.shapes[2]?.transform.resolved.frame,
+    );
   });
 });
