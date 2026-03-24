@@ -1,4 +1,4 @@
-import { ZtkDocument, ZtkNode } from './ast.js';
+import type { ZtkDocument, ZtkNode } from './ast.js';
 
 function serializeNode(node: ZtkNode): string {
   switch (node.type) {

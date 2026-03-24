@@ -12,14 +12,8 @@
     "strict": true,
     "useUnknownInCatchVariables": true,
     "skipLibCheck": true,
-    "types": [
-      "vitest/globals"
-    ],
-    "lib": [
-      "ES2022"
-    ]
+    "types": ["vitest/globals"],
+    "lib": ["ES2022"]
   },
-  "include": [
-    "src"
-  ]
+  "include": ["src"]
 }

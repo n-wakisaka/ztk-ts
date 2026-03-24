@@ -1,4 +1,11 @@
-import { ZtkCommentNode, ZtkDocument, ZtkKeyValueNode, ZtkNode, ZtkTagNode, createDocument } from './ast.js';
+import {
+  createDocument,
+  type ZtkCommentNode,
+  type ZtkDocument,
+  type ZtkKeyValueNode,
+  type ZtkNode,
+  type ZtkTagNode,
+} from './ast.js';
 import { tokenizeValue } from './tokenize.js';
 
 function isBlankLine(line: string): boolean {
@@ -54,7 +61,10 @@ function updateDepth(line: string, depth: number): number {
   return nextDepth;
 }
 
-function parseKeyValueNode(lines: string[], start: number): { node: ZtkKeyValueNode; nextIndex: number } | null {
+function parseKeyValueNode(
+  lines: string[],
+  start: number,
+): { node: ZtkKeyValueNode; nextIndex: number } | null {
   const firstLine = parseKeyValueLine(lines[start]);
   if (!firstLine) {
     return null;
