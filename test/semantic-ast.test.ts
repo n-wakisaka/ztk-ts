@@ -702,6 +702,27 @@ import: ${importedPath}
     ]);
   });
 
+  test('reports import-resolution-failed for malformed imported .obj geometry', () => {
+    const importedPath = fileURLToPath(
+      new URL('./fixtures/imported-malformed.obj', import.meta.url),
+    );
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: ${importedPath}
+`),
+    );
+
+    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic);
+
+    expect(analysis.supported).toBe(false);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'import-resolution-failed',
+    ]);
+    expect(analysis.diagnostics[0]?.effect).toBe('runtime-materialization');
+  });
+
   test('materializes imported .obj polyhedron shapes for runtime export', () => {
     const importedPath = fileURLToPath(
       new URL('./fixtures/imported-triangle.obj', import.meta.url),
@@ -823,6 +844,27 @@ import: ${importedPath} 2
       prisms: [],
       pyramids: [],
     });
+  });
+
+  test('keeps semantically valid but runtime-unresolved dae imports in normalized output', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: mesh.dae 1.5
+pos: 1 2 3
+`),
+    );
+
+    const normalized = serializeSemanticZtkNormalized(semantic);
+    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic);
+
+    expect(normalized.text).toContain('import: mesh.dae 1.5');
+    expect(normalized.text).toContain('frame:');
+    expect(analysis.supported).toBe(false);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'unsupported-import-resolution',
+    ]);
   });
 
   test('rejects unsupported import formats during materialized runtime export', () => {

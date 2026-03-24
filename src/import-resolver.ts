@@ -1,5 +1,8 @@
-import { readFileSync } from 'node:fs';
-
+import {
+  type NodeBufferLike,
+  readNodeFileBufferSync,
+  readNodeFileTextSync,
+} from './node-file-access.js';
 import type { ZtkShape, ZtkShapeGeometry } from './semantic.js';
 import type { ZtkImportedShapeResolution, ZtkImportedShapeSource } from './semantic-serialize.js';
 
@@ -18,17 +21,21 @@ function parseObjFaceVertexIndex(token: string): number | undefined {
 }
 
 function parseObjImportedGeometry(source: ZtkImportedShapeSource): ZtkImportedShapeResolution {
-  let text: string;
-  try {
-    text = readFileSync(source.importName, 'utf8');
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+  const textResult = readNodeFileTextSync(source.importName);
+  if (!textResult.ok) {
     return {
       kind: 'failed',
-      code: 'import-resolution-failed',
-      message: `Failed to read imported ".obj" shape "${source.importName}": ${detail}`,
+      code:
+        textResult.code === 'filesystem-unavailable'
+          ? 'unsupported-import-resolution'
+          : 'import-resolution-failed',
+      message:
+        textResult.code === 'filesystem-unavailable'
+          ? textResult.message
+          : `Failed to read imported ".obj" shape "${source.importName}": ${textResult.message}`,
     };
   }
+  const text = textResult.value;
 
   const vertices: number[][] = [];
   const faces: number[][] = [];
@@ -179,7 +186,7 @@ function finalizePolyhedronGeometry(
 
 function parseAsciiStlImportedGeometry(
   source: ZtkImportedShapeSource,
-  buffer: Buffer,
+  buffer: NodeBufferLike,
 ): ZtkImportedShapeResolution {
   const text = buffer.toString('utf8');
   const vertices: number[][] = [];
@@ -232,7 +239,7 @@ function parseAsciiStlImportedGeometry(
   return finalizePolyhedronGeometry('stl', source, vertices, faces);
 }
 
-function looksLikeBinaryStl(buffer: Buffer): boolean {
+function looksLikeBinaryStl(buffer: NodeBufferLike): boolean {
   if (buffer.length < 84) {
     return false;
   }
@@ -243,7 +250,7 @@ function looksLikeBinaryStl(buffer: Buffer): boolean {
 
 function parseBinaryStlImportedGeometry(
   source: ZtkImportedShapeSource,
-  buffer: Buffer,
+  buffer: NodeBufferLike,
 ): ZtkImportedShapeResolution {
   if (buffer.length < 84) {
     return {
@@ -286,17 +293,21 @@ function parseBinaryStlImportedGeometry(
 }
 
 function parseStlImportedGeometry(source: ZtkImportedShapeSource): ZtkImportedShapeResolution {
-  let buffer: Buffer;
-  try {
-    buffer = readFileSync(source.importName);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+  const bufferResult = readNodeFileBufferSync(source.importName);
+  if (!bufferResult.ok) {
     return {
       kind: 'failed',
-      code: 'import-resolution-failed',
-      message: `Failed to read imported ".stl" shape "${source.importName}": ${detail}`,
+      code:
+        bufferResult.code === 'filesystem-unavailable'
+          ? 'unsupported-import-resolution'
+          : 'import-resolution-failed',
+      message:
+        bufferResult.code === 'filesystem-unavailable'
+          ? bufferResult.message
+          : `Failed to read imported ".stl" shape "${source.importName}": ${bufferResult.message}`,
     };
   }
+  const buffer = bufferResult.value;
 
   if (looksLikeBinaryStl(buffer)) {
     return parseBinaryStlImportedGeometry(source, buffer);
@@ -340,7 +351,7 @@ function isPlyScalarType(value: string): value is PlyScalarType {
 
 function parsePlyHeader(
   source: ZtkImportedShapeSource,
-  buffer: Buffer,
+  buffer: NodeBufferLike,
 ):
   | { format: PlyFormat; elements: PlyElement[]; headerLength: number }
   | ZtkImportedShapeResolution {
@@ -481,7 +492,7 @@ function parsePlyAsciiScalar(type: PlyScalarType, token: string): number {
 }
 
 function readPlyBinaryScalar(
-  buffer: Buffer,
+  buffer: NodeBufferLike,
   offset: number,
   type: PlyScalarType,
   littleEndian: boolean,
@@ -538,17 +549,21 @@ function triangulatePlyFace(indices: number[]): number[][] {
 }
 
 function parsePlyImportedGeometry(source: ZtkImportedShapeSource): ZtkImportedShapeResolution {
-  let buffer: Buffer;
-  try {
-    buffer = readFileSync(source.importName);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+  const bufferResult = readNodeFileBufferSync(source.importName);
+  if (!bufferResult.ok) {
     return {
       kind: 'failed',
-      code: 'import-resolution-failed',
-      message: `Failed to read imported ".ply" shape "${source.importName}": ${detail}`,
+      code:
+        bufferResult.code === 'filesystem-unavailable'
+          ? 'unsupported-import-resolution'
+          : 'import-resolution-failed',
+      message:
+        bufferResult.code === 'filesystem-unavailable'
+          ? bufferResult.message
+          : `Failed to read imported ".ply" shape "${source.importName}": ${bufferResult.message}`,
     };
   }
+  const buffer = bufferResult.value;
 
   const parsedHeader = parsePlyHeader(source, buffer);
   if ('kind' in parsedHeader) {

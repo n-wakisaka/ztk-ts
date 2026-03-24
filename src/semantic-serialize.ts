@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import {
   createDocument,
   type ZtkDocument,
@@ -8,6 +7,7 @@ import {
 } from './ast.js';
 import { createSerializationDiagnostic, type ZtkSerializationDiagnostic } from './diagnostics.js';
 import { loadImportedShapeGeometry } from './import-resolver.js';
+import { readNodeFileTextSync } from './node-file-access.js';
 import { parseZtk } from './parse.js';
 import type {
   ZtkMat3,
@@ -697,17 +697,21 @@ function resolveImportedShape(
     return scaleImportedShapeGeometry(transformed.geometry, source.importScale);
   }
 
-  let text: string;
-  try {
-    text = readFileSync(source.importName, 'utf8');
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+  const textResult = readNodeFileTextSync(source.importName);
+  if (!textResult.ok) {
     return {
       kind: 'failed',
-      code: 'import-resolution-failed',
-      message: `Failed to read imported ".ztk" shape "${source.importName}": ${detail}`,
+      code:
+        textResult.code === 'filesystem-unavailable'
+          ? 'unsupported-import-resolution'
+          : 'import-resolution-failed',
+      message:
+        textResult.code === 'filesystem-unavailable'
+          ? textResult.message
+          : `Failed to read imported ".ztk" shape "${source.importName}": ${textResult.message}`,
     };
   }
+  const text = textResult.value;
 
   const imported = resolveZtk(parseZtk(text));
   const importedShape = imported.shapes[0];

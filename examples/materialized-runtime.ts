@@ -26,7 +26,6 @@ const semantic = resolveZtk(parseZtk(sourceText));
 //    現時点の ztk-ts では import の format 判定までは内部で行いますが、
 //    built-in loader は `.ztk` / `.obj` / `.stl` / `.ply` まで実装済みなので、
 //    この例を `.dae` などに変えると supported: false になります。
-//    supported: false になります。
 const blockedAnalysis = analyzeSemanticZtkMaterializedRuntime(semantic);
 console.log('blocked analysis:', blockedAnalysis);
 
