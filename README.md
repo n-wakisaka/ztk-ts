@@ -29,6 +29,9 @@ Rendering and kinematics belong in `roki-three`.
 - `resolveZtk()` emits `validation` diagnostics for parse/resolve problems
 - `serializeSemanticZtkPreservingSource()` emits the original source AST stored on the semantic document for lossless save flows
 - `serializeSemanticZtkNormalized()` emits upstream-aligned normalized output from the semantic model and reports `serialization-policy` diagnostics for lossy normalization decisions such as alias folding, inactive key omission, jointtype-specific key pruning, shape-source pruning, or transform canonicalization to `frame`
+- `analyzeSemanticZtkMaterializedRuntime()` is a preflight helper for future runtime/export materialization; it reports which shapes would be materialized and whether the current semantic model has enough information to do it, and it accepts an optional `resolveImportedShapeGeometry(shape)` callback for external `import` geometry
+- `serializeSemanticZtkMaterializedRuntime()` currently supports mirror-based materialization for primitive shapes, NURBS, explicit polyhedra, and procedural polyhedra whose loop structure is preserved semantically; external `import` geometry can also be materialized when the caller supplies `resolveImportedShapeGeometry(shape)`
+- procedural polyhedron loops now have structured semantic forms (`ZtkProceduralLoop`, `ZtkProceduralLoopCommand`) in addition to the legacy flat token list
 - `serialization-policy` diagnostics now also expose `effect`:
   - `canonicalization`: semantics preserved but representation unified
   - `source-loss`: source-only or inactive detail omitted

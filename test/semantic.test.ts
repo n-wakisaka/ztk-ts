@@ -435,6 +435,18 @@ prism: 0 0 0.04
       proceduralLoops: [
         ['z', '0.02', '-0.05', '-0.06', 'arc', 'cw', '0.08', '24', '-0.05', '0.06'],
       ],
+      proceduralLoopDefs: [
+        {
+          planeAxis: 'z',
+          planeValue: 0.02,
+          commands: [
+            { kind: 'point', point: [-0.05, -0.06] },
+            { kind: 'arc', direction: 'cw', radius: 0.08, div: 24 },
+            { kind: 'point', point: [-0.05, 0.06] },
+          ],
+          tokens: ['z', '0.02', '-0.05', '-0.06', 'arc', 'cw', '0.08', '24', '-0.05', '0.06'],
+        },
+      ],
       prisms: [[0, 0, 0.04]],
       pyramids: [],
     });

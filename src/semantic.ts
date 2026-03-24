@@ -289,6 +289,26 @@ export type ZtkMap = {
   unknownKeys: ZtkKeyValueNode[];
 };
 
+export type ZtkProceduralLoopCommand =
+  | {
+      kind: 'point';
+      point: [number, number];
+    }
+  | {
+      kind: 'arc';
+      direction: string;
+      radius: number;
+      div: number;
+      endpoint?: [number, number];
+    };
+
+export type ZtkProceduralLoop = {
+  planeAxis: string;
+  planeValue: number;
+  commands: ZtkProceduralLoopCommand[];
+  tokens: string[];
+};
+
 export type ZtkShapeGeometry =
   | {
       type: 'box';
@@ -349,6 +369,7 @@ export type ZtkShapeGeometry =
       faces: number[][];
       loops: number[][];
       proceduralLoops: string[][];
+      proceduralLoopDefs: ZtkProceduralLoop[];
       prisms: number[][];
       pyramids: number[][];
     }
@@ -546,6 +567,142 @@ function parseNumberList(
 
 function isNumericTokenList(values: string[]): boolean {
   return values.every((token) => !Number.isNaN(Number(token)));
+}
+
+function tokenizeProceduralLoopLine(line: string): string[] {
+  return line
+    .replaceAll(',', ' ')
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length > 0);
+}
+
+function proceduralLoopToTokens(loop: ZtkProceduralLoop): string[] {
+  const tokens = [loop.planeAxis, `${loop.planeValue}`];
+
+  for (const command of loop.commands) {
+    if (command.kind === 'point') {
+      tokens.push(`${command.point[0]}`, `${command.point[1]}`);
+      continue;
+    }
+
+    tokens.push('arc', command.direction, `${command.radius}`, `${command.div}`);
+    if (command.endpoint) {
+      tokens.push(`${command.endpoint[0]}`, `${command.endpoint[1]}`);
+    }
+  }
+
+  return tokens;
+}
+
+function parseProceduralLoop(
+  node: ZtkKeyValueNode,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkProceduralLoop | undefined {
+  const lines = node.rawValue
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+
+  const header = lines[0] ? tokenizeProceduralLoopLine(lines[0]) : [];
+  if (header.length < 2) {
+    pushDiagnostic(diagnostics, {
+      code: 'invalid-procedural-loop',
+      message: 'Procedural polyhedron loop is missing plane header tokens',
+      tag,
+      key: node.key,
+    });
+    return undefined;
+  }
+
+  const planeAxis = header[0] ?? '';
+  const planeValue = Number(header[1]);
+  if (Number.isNaN(planeValue)) {
+    pushDiagnostic(diagnostics, {
+      code: 'invalid-number',
+      message: `Expected numeric loop plane value but got "${header[1]}"`,
+      tag,
+      key: node.key,
+    });
+    return undefined;
+  }
+
+  const commands: ZtkProceduralLoopCommand[] = [];
+  for (const line of lines.slice(1)) {
+    const tokens = tokenizeProceduralLoopLine(line);
+    if (tokens.length === 0) {
+      continue;
+    }
+
+    if (tokens[0] === 'arc') {
+      const radius = Number(tokens[2]);
+      const div = Number(tokens[3]);
+      if (Number.isNaN(radius) || Number.isNaN(div)) {
+        pushDiagnostic(diagnostics, {
+          code: 'invalid-number',
+          message: `Invalid arc parameters in procedural loop "${line}"`,
+          tag,
+          key: node.key,
+        });
+        return undefined;
+      }
+
+      let endpoint: [number, number] | undefined;
+      if (tokens.length >= 6) {
+        const x = Number(tokens[4]);
+        const y = Number(tokens[5]);
+        if (Number.isNaN(x) || Number.isNaN(y)) {
+          pushDiagnostic(diagnostics, {
+            code: 'invalid-number',
+            message: `Invalid arc endpoint in procedural loop "${line}"`,
+            tag,
+            key: node.key,
+          });
+          return undefined;
+        }
+        endpoint = [x, y];
+      }
+
+      commands.push({
+        kind: 'arc',
+        direction: tokens[1] ?? '',
+        radius,
+        div,
+        endpoint,
+      });
+      continue;
+    }
+
+    const x = Number(tokens[0]);
+    const y = Number(tokens[1]);
+    if (Number.isNaN(x) || Number.isNaN(y)) {
+      pushDiagnostic(diagnostics, {
+        code: 'invalid-number',
+        message: `Invalid procedural loop point "${line}"`,
+        tag,
+        key: node.key,
+      });
+      return undefined;
+    }
+
+    commands.push({
+      kind: 'point',
+      point: [x, y],
+    });
+  }
+
+  return {
+    planeAxis,
+    planeValue,
+    commands,
+    tokens: proceduralLoopToTokens({
+      planeAxis,
+      planeValue,
+      commands,
+      tokens: [],
+    }),
+  };
 }
 
 function parseJointState(
@@ -1869,6 +2026,10 @@ function parseShapeGeometry(
         proceduralLoops: loopNodes
           .filter((node) => !isNumericTokenList(node.values))
           .map((node) => [...node.values]),
+        proceduralLoopDefs: loopNodes
+          .filter((node) => !isNumericTokenList(node.values))
+          .map((node) => parseProceduralLoop(node, diagnostics, 'zeo::shape'))
+          .filter((value): value is ZtkProceduralLoop => value !== undefined),
         prisms: prismNodes
           .map((node) => parseNumberList(node, diagnostics, 'zeo::shape'))
           .filter((value): value is number[] => value !== undefined),

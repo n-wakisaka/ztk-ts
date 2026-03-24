@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
+import type { ZtkShapeGeometry } from '../src/index.js';
 import {
   parseZtk,
   resolveZtk,
@@ -18,6 +19,12 @@ function fixturePath(relativePath: string): URL {
   return new URL(`./fixtures/corpus/${relativePath}`, import.meta.url);
 }
 
+function isPolyhedronGeometry(
+  geometry: ZtkShapeGeometry,
+): geometry is Extract<ZtkShapeGeometry, { type: 'polyhedron' }> {
+  return geometry.type === 'polyhedron';
+}
+
 function countDiagnosticsByCode(
   diagnostics: ReadonlyArray<{ code: string }>,
 ): Record<string, number> {
@@ -28,6 +35,13 @@ function countDiagnosticsByCode(
   }
 
   return counts;
+}
+
+function normalizeNumericTokens(tokens: string[]): string[] {
+  return tokens.map((token) => {
+    const value = Number(token);
+    return Number.isNaN(value) ? token : `${value}`;
+  });
 }
 
 const corpusCases: CorpusCase[] = [
@@ -87,38 +101,43 @@ const corpusCases: CorpusCase[] = [
     verify(model) {
       expect(model.diagnostics).toEqual([]);
       const upperarm = model.shapes.find((shape) => shape.name === 'upperarm');
-      expect(upperarm?.geometry).toEqual(
-        expect.objectContaining({
-          type: 'polyhedron',
-          proceduralLoops: [
-            [
-              'z',
-              '0.02',
-              '-0.05',
-              '-0.06',
-              'arc',
-              'cw',
-              '0.08',
-              '24',
-              '-0.05',
-              '0.06',
-              '0.05',
-              '0.06',
-              '0.20',
-              '0.03',
-              'arc',
-              'cw',
-              '0.03',
-              '12',
-              '0.20',
-              '-0.03',
-              '0.05',
-              '-0.06',
-            ],
+      const geometry = upperarm?.geometry;
+      expect(geometry?.type).toBe('polyhedron');
+      if (geometry && isPolyhedronGeometry(geometry)) {
+        expect(geometry.proceduralLoops.map(normalizeNumericTokens)).toEqual([
+          [
+            'z',
+            '0.02',
+            '-0.05',
+            '-0.06',
+            'arc',
+            'cw',
+            '0.08',
+            '24',
+            '-0.05',
+            '0.06',
+            '0.05',
+            '0.06',
+            '0.2',
+            '0.03',
+            'arc',
+            'cw',
+            '0.03',
+            '12',
+            '0.2',
+            '-0.03',
+            '0.05',
+            '-0.06',
           ],
-          prisms: [[0, 0, 0.04]],
-        }),
-      );
+        ]);
+        expect(geometry.proceduralLoopDefs[0]).toEqual(
+          expect.objectContaining({
+            planeAxis: 'z',
+            planeValue: 0.02,
+          }),
+        );
+        expect(geometry.prisms).toEqual([[0, 0, 0.04]]);
+      }
     },
   },
   {

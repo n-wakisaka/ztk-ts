@@ -19,7 +19,8 @@
 - `materialize-runtime`
   - runtime/export 向けに `mirror` / `import` / transform を展開しうる層
   - upstream `FPrintZTK` 寄りの不可逆 export を隔離する
-  - 現時点では未実装
+  - 現時点では serializer 本体は未実装
+  - API: `analyzeSemanticZtkMaterializedRuntime()` で preflight のみ提供
 
 この分離により、lossless save と runtime export を同じ API に押し込めない。
 
@@ -51,6 +52,48 @@ validation failure と serializer policy も分けて扱います。
 - unknown section / unknown key は semantic model に保持されている限り再出力する
 - formatting は `serializeZtkNormalized()` に委ねる
 - `materialize-runtime` でのみ、runtime 都合の不可逆展開を許容する
+
+## Materialized Runtime Preflight
+
+現時点では `materialize-runtime` serializer 本体の代わりに、`analyzeSemanticZtkMaterializedRuntime()` で事前分析だけを行う。
+
+- `mirror` を持つ `zeo::shape`
+  - diagnostic: `materializes-shape-mirror`
+  - effect: `runtime-materialization`
+  - 意味: runtime export では mirror 参照を resolved geometry に展開する想定
+- `import` を持つ `zeo::shape`
+  - diagnostic: `requires-external-shape-import`
+  - effect: `runtime-materialization`
+  - 意味: semantic model だけでは import 先の geometry 実体を保持していないため、resolver なしの materialized export は block される
+
+preflight の `supported` は、現在の semantic model だけで materialize を完結できるかを表す。
+
+## Current Materialized Runtime Scope
+
+`serializeSemanticZtkMaterializedRuntime()` は部分実装で、次だけを扱う。
+
+- `mirror` shape
+  - mirror source の semantic geometry を複製し、axis に沿って反転した geometry として出力する
+  - `mirror` / `import` key は出力しない
+  - diagnostic: `materializes-shape-mirror`
+  - effect: `runtime-materialization`
+- procedural polyhedron mirror
+  - semantic model に保持した structured loop def を使って `loop` / `prism` / `pyramid` を standalone polyhedron 定義として再出力する
+  - `arc` の endpoint 省略有無も保持する
+  - procedural mirror は flat token ではなく structured loop def を正本とする
+- `import` shape
+  - semantic model 単体では import 先 geometry 実体がない
+  - caller が `resolveImportedShapeGeometry(shape)` を渡した場合は、その geometry で `import` source を concrete shape に置換する
+  - resolver がない場合は serializer は `supported: false` を返す
+  - diagnostics:
+    - `materializes-shape-import` when resolver supplied concrete geometry
+    - `requires-external-shape-import` when no external geometry is available
+  - effect: `runtime-materialization`
+- unsupported mirrored geometry
+  - numeric loop extrusion without structured procedural loop, unknown geometry type などは未対応
+  - serializer は `supported: false` を返す
+  - diagnostic: `unsupported-shape-materialization`
+  - effect: `runtime-materialization`
 
 ## Current Policy
 

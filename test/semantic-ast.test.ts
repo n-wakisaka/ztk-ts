@@ -1,9 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
+  analyzeSemanticZtkMaterializedRuntime,
   parseZtk,
   resolveZtk,
   semanticToAst,
+  serializeSemanticZtkMaterializedRuntime,
   serializeSemanticZtkNormalized,
   serializeSemanticZtkPreservingSource,
   serializeZtkNormalized,
@@ -214,12 +216,18 @@ prism: 0 0 0.04
     const text = serializeZtkNormalized(semanticToAst(semantic));
     const reparsed = resolveZtk(parseZtk(text));
 
-    expect(text).toContain('loop: z 0.02 -0.05 -0.06 arc cw 0.08 24 -0.05 0.06');
+    expect(text).toContain('loop: z 0.02\n  -0.05 -0.06\n  arc cw 0.08 24\n  -0.05 0.06');
     expect(reparsed.shapes[0].geometry).toEqual(
       expect.objectContaining({
         type: 'polyhedron',
         proceduralLoops: [
           ['z', '0.02', '-0.05', '-0.06', 'arc', 'cw', '0.08', '24', '-0.05', '0.06'],
+        ],
+        proceduralLoopDefs: [
+          expect.objectContaining({
+            planeAxis: 'z',
+            planeValue: 0.02,
+          }),
         ],
         prisms: [[0, 0, 0.04]],
       }),
@@ -484,6 +492,287 @@ radius: 0.5
     expect(normalized.text).not.toContain('radius: 0.5');
     expect(normalized.diagnostics.map((diagnostic) => diagnostic.code)).toContain(
       'drops-inactive-shape-key',
+    );
+  });
+
+  test('analyzes materialized runtime preflight for mirror and import shapes', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: source
+type: sphere
+radius: 0.5
+
+[zeo::shape]
+name: mirrored
+mirror: source y
+
+[zeo::shape]
+name: imported
+import: mesh.stl 2
+`),
+    );
+
+    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic);
+
+    expect(analysis.layer).toBe('materialize-runtime');
+    expect(analysis.supported).toBe(false);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'materializes-shape-mirror',
+      'requires-external-shape-import',
+    ]);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.effect)).toEqual([
+      'runtime-materialization',
+      'runtime-materialization',
+    ]);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.key)).toEqual(['mirror', 'import']);
+  });
+
+  test('materializes mirror shapes into concrete runtime geometry', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: source
+type: sphere
+center: 1 2 3
+radius: 0.5
+
+[zeo::shape]
+name: mirrored
+mirror: source y
+pos: 0 1 0
+`),
+    );
+
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic);
+    const reparsed = resolveZtk(parseZtk(serialized.text ?? ''));
+
+    expect(serialized.supported).toBe(true);
+    expect(serialized.text).toContain('type: sphere');
+    expect(serialized.text).toContain('center: { 1, -2, 3 }');
+    expect(serialized.text).not.toContain('mirror: source y');
+    expect(serialized.text).toContain('frame:');
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'materializes-shape-mirror',
+    ]);
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.effect)).toEqual([
+      'runtime-materialization',
+    ]);
+    expect(reparsed.shapes[1]?.mirrorName).toBeUndefined();
+    expect(reparsed.shapes[1]?.type).toBe('sphere');
+    expect(reparsed.shapes[1]?.geometry).toEqual({
+      type: 'sphere',
+      center: [1, -2, 3],
+      radius: 0.5,
+      div: undefined,
+    });
+  });
+
+  test('blocks materialized runtime export for external imports', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: mesh.stl 2
+`),
+    );
+
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic);
+
+    expect(serialized.supported).toBe(false);
+    expect(serialized.text).toBeUndefined();
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'requires-external-shape-import',
+    ]);
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.effect)).toEqual([
+      'runtime-materialization',
+    ]);
+  });
+
+  test('materializes imported shapes when external geometry is provided', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: mesh.stl 2
+texture: checker
+`),
+    );
+
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic, {
+      resolveImportedShapeGeometry: (shape) =>
+        shape.importName === 'mesh.stl'
+          ? {
+              type: 'box',
+              center: [0, 0, 0],
+              ax: undefined,
+              ay: undefined,
+              az: undefined,
+              depth: 1,
+              width: 2,
+              height: 3,
+            }
+          : undefined,
+    });
+    const reparsed = resolveZtk(parseZtk(serialized.text ?? ''));
+
+    expect(serialized.supported).toBe(true);
+    expect(serialized.text).toContain('type: box');
+    expect(serialized.text).not.toContain('import: mesh.stl 2');
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'materializes-shape-import',
+    ]);
+    expect(reparsed.shapes[0]?.type).toBe('box');
+    expect(reparsed.shapes[0]?.importName).toBeUndefined();
+    expect(reparsed.shapes[0]?.geometry).toEqual({
+      type: 'box',
+      center: [0, 0, 0],
+      ax: undefined,
+      ay: undefined,
+      az: undefined,
+      depth: 1,
+      width: 2,
+      height: 3,
+    });
+  });
+
+  test('materializes mirrors of imported shapes when external geometry is provided', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: mesh.stl
+
+[zeo::shape]
+name: mirrored
+mirror: imported x
+`),
+    );
+
+    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic, {
+      resolveImportedShapeGeometry: (shape) =>
+        shape.importName === 'mesh.stl'
+          ? {
+              type: 'sphere',
+              center: [1, 2, 3],
+              radius: 0.5,
+              div: undefined,
+            }
+          : undefined,
+    });
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic, {
+      resolveImportedShapeGeometry: (shape) =>
+        shape.importName === 'mesh.stl'
+          ? {
+              type: 'sphere',
+              center: [1, 2, 3],
+              radius: 0.5,
+              div: undefined,
+            }
+          : undefined,
+    });
+    const reparsed = resolveZtk(parseZtk(serialized.text ?? ''));
+
+    expect(analysis.supported).toBe(true);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'materializes-shape-import',
+      'materializes-shape-mirror',
+    ]);
+    expect(serialized.supported).toBe(true);
+    expect(serialized.text).toContain('type: sphere');
+    expect(serialized.text).toContain('center: { -1, 2, 3 }');
+    expect(serialized.text).not.toContain('mirror: imported x');
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'materializes-shape-import',
+      'materializes-shape-mirror',
+    ]);
+    expect(reparsed.shapes[1]?.geometry).toEqual({
+      type: 'sphere',
+      center: [-1, 2, 3],
+      radius: 0.5,
+      div: undefined,
+    });
+  });
+
+  test('materializes mirrored nurbs control points for runtime export', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: source
+type: nurbs
+dim: 3 3
+uknot: 9 0 0 0 0 1 2 2 2 2
+vknot: 9 0 0 0 0 1 2 2 2 2
+size: 5 5
+slice: 30 30
+cp: 0 0 1 1 -2 0
+cp: 4 4 1 7 2 0
+
+[zeo::shape]
+name: mirrored
+mirror: source y
+`),
+    );
+
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic);
+    const reparsed = resolveZtk(parseZtk(serialized.text ?? ''));
+
+    expect(serialized.supported).toBe(true);
+    expect(serialized.text).not.toContain('mirror: source y');
+    expect(serialized.text).toContain('cp: 0 0 1 1 2 0');
+    expect(serialized.text).toContain('cp: 4 4 1 7 -2 0');
+    expect(reparsed.shapes[1]?.type).toBe('nurbs');
+    expect(reparsed.shapes[1]?.geometry).toEqual({
+      type: 'nurbs',
+      dim: [3, 3],
+      uKnots: [[9, 0, 0, 0, 0, 1, 2, 2, 2, 2]],
+      vKnots: [[9, 0, 0, 0, 0, 1, 2, 2, 2, 2]],
+      sizes: [[5, 5]],
+      controlPoints: [
+        [0, 0, 1, 1, 2, 0],
+        [4, 4, 1, 7, -2, 0],
+      ],
+      slices: [[30, 30]],
+    });
+  });
+
+  test('materializes mirrored procedural polyhedron loops for runtime export', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: source
+type: polyhedron
+loop: z 0.02
+ -0.05 -0.06
+ arc cw 0.08 24
+ -0.05 0.06
+prism: 0 0 0.04
+
+[zeo::shape]
+name: mirrored
+mirror: source y
+`),
+    );
+
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic);
+    const reparsed = resolveZtk(parseZtk(serialized.text ?? ''));
+
+    expect(serialized.supported).toBe(true);
+    expect(serialized.text).not.toContain('mirror: source y');
+    expect(serialized.text).toContain('loop: z 0.02');
+    expect(serialized.text).toContain('-0.05 0.06');
+    expect(serialized.text).toContain('arc ccw 0.08 24');
+    expect(serialized.text).toContain('-0.05 -0.06');
+    expect(serialized.text).toContain('prism: 0 0 0.04');
+    expect(reparsed.shapes[1]?.type).toBe('polyhedron');
+    expect(reparsed.shapes[1]?.geometry).toEqual(
+      expect.objectContaining({
+        type: 'polyhedron',
+        proceduralLoops: [
+          ['z', '0.02', '-0.05', '0.06', 'arc', 'ccw', '0.08', '24', '-0.05', '-0.06'],
+        ],
+        prisms: [[0, 0, 0.04]],
+      }),
     );
   });
 

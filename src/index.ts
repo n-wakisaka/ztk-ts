@@ -40,6 +40,8 @@ export type {
   ZtkMotor,
   ZtkMotorType,
   ZtkOptic,
+  ZtkProceduralLoop,
+  ZtkProceduralLoopCommand,
   ZtkResolvedTransform,
   ZtkResolvedTransformMode,
   ZtkSemanticDocument,
@@ -56,12 +58,18 @@ export type {
 export { resolveZtk } from './semantic.js';
 export { semanticToAst } from './semantic-ast.js';
 export type {
+  ZtkMaterializedRuntimeGeometryResolver,
+  ZtkMaterializedRuntimeSerialization,
+  ZtkMaterializedRuntimeSerializationAnalysis,
+  ZtkMaterializedRuntimeSerializationOptions,
   ZtkNormalizedSemanticSerialization,
   ZtkSemanticSerializationLayer,
   ZtkSourcePreservingSemanticSerialization,
 } from './semantic-serialize.js';
 export {
+  analyzeSemanticZtkMaterializedRuntime,
   collectNormalizedSemanticSerializationDiagnostics,
+  serializeSemanticZtkMaterializedRuntime,
   serializeSemanticZtkNormalized,
   serializeSemanticZtkPreservingSource,
 } from './semantic-serialize.js';

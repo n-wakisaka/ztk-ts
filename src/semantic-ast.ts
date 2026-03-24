@@ -13,6 +13,7 @@ import type {
   ZtkMat3x4,
   ZtkMotor,
   ZtkOptic,
+  ZtkProceduralLoop,
   ZtkSemanticDocument,
   ZtkShape,
   ZtkShapeGeometry,
@@ -90,6 +91,30 @@ function formatMat3x4(value: ZtkMat3x4): string {
 
 function formatNumberList(values: number[]): string {
   return values.join(' ');
+}
+
+function formatProceduralLoop(loop: ZtkProceduralLoop): string {
+  const lines = [`${loop.planeAxis} ${formatNumber(loop.planeValue)}`];
+
+  for (const command of loop.commands) {
+    if (command.kind === 'point') {
+      lines.push(`${formatNumber(command.point[0])} ${formatNumber(command.point[1])}`);
+      continue;
+    }
+
+    const arcTokens = [
+      'arc',
+      command.direction,
+      formatNumber(command.radius),
+      formatNumber(command.div),
+      ...(command.endpoint
+        ? [formatNumber(command.endpoint[0]), formatNumber(command.endpoint[1])]
+        : []),
+    ];
+    lines.push(arcTokens.join(' '));
+  }
+
+  return lines.join('\n');
 }
 
 function pushKeyValue(nodes: ZtkNode[], key: string, rawValue: string | undefined): void {
@@ -491,8 +516,13 @@ function renderShape(shape: ZtkShape, options?: ZtkSemanticAstOptions): ZtkNode[
     for (const loop of geometry.loops) {
       pushKeyValue(nodes, 'loop', formatNumberList(loop));
     }
-    for (const loop of geometry.proceduralLoops) {
-      pushKeyValue(nodes, 'loop', loop.join(' '));
+    for (const loop of geometry.proceduralLoopDefs) {
+      pushKeyValue(nodes, 'loop', formatProceduralLoop(loop));
+    }
+    if (geometry.proceduralLoopDefs.length === 0) {
+      for (const loop of geometry.proceduralLoops) {
+        pushKeyValue(nodes, 'loop', loop.join(' '));
+      }
     }
     for (const prism of geometry.prisms) {
       pushKeyValue(nodes, 'prism', formatNumberList(prism));
