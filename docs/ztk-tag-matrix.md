@@ -11,14 +11,20 @@ semantic model の最初の実装は `P1` を優先するのが妥当です。
 | --- | --- | --- | --- | --- |
 | `roki::chain` | roki | P1 | `name` | chain 全体の名前 |
 | `roki::chain::init` | roki | P1 | `pos`, `att`, `frame`, `joint` | 初期姿勢と初期関節値 |
-| `roki::link` | roki | P1 | `name`, `jointtype`, `mass`, `density`, `stuff`, `COM`, `inertia`, `pos`, `att`, `rot`, `frame`, `DH`, `shape`, `parent`, `bind` | viewer / editor の中心 |
+| `roki::link` | roki | P1 | `name`, `jointtype`, `mass`, `density`, `stuff`, `COM`, `inertia`, `pos`, `att`, `rot`, `frame`, `DH`, `shape`, `parent`, `bind` と joint 依存 key | viewer / editor の中心 |
 | `roki::motor` | roki | P1 | `name`, `type`, `min`, `max`, `motorconstant`, `admittance`, `maxvoltage`, `minvoltage`, `gearratio`, `rotorinertia`, `gearinertia`, `compk`, `compl` | motor specification |
 | `zeo::optic` | zeo | P1 | `name`, `ambient`, `diffuse`, `specular`, `esr`, `shininess`, `alpha` | material 相当 |
 | `zeo::shape` | zeo | P1 | `name`, `type`, `optic`, `texture`, `mirror`, `import`, `pos`, `att`, `rot`, `frame` と shape 固有 key | shape 本体 |
-| `roki::chain::ik` | roki | P2 | `joint`, `constraint` | 初版 viewer では後回し可 |
+| `roki::chain::ik` | roki | P2 | `joint`, `constraint` | key 数は少ないが `constraint` の payload は型依存 |
 | `roki::contact` | roki | P2 | `bind`, `staticfriction`, `kineticfriction`, `compensation`, `relaxation`, `elasticity`, `viscosity` | 接触モデル |
 | `zeo::texture` | zeo | P2 | `name`, `file`, `type`, `depth`, `coord`, `face` | texture 対応用 |
-| `zeo::map` | zeo | P3 | `name`, `type` | 初期スコープ外 |
+| `zeo::map` | zeo | P3 | `name`, `type` と type 依存 key | upstream 実装では現状 `terra` のみ確認 |
+
+調査基準:
+
+- この表は sample ではなく upstream の `_ZTKEvalTag` / `_ZTKEvalKey` と `ZTKPrp` table を基準にしている
+- 現時点で `roki` / `zeo` が直接受理する ZTK tag は上の 9 個で打ち止め
+- `roki::chain` の reader は `zeo::optic` / `zeo::texture` / `zeo::shape` を同じファイル内で併読する
 
 ## `roki::link`
 
@@ -42,6 +48,12 @@ semantic model の最初の実装は `P1` を優先するのが妥当です。
 | `parent` | 親 link 名 | 木構造の接続 |
 | `bind` | 束縛 link 名 | 意味は未確定 |
 
+補足:
+
+- `DH` は `zeo` / `roki` 実装に合わせて modified DH として `resolved.frame` に解決する
+- `viscos` は corpus 互換の別名として `viscosity` に寄せて扱う
+- `roki::chain::init` では `joint: ...` に加えて `<linkName>: ...` 形式の named joint state も読む
+
 ### joint 依存 key
 
 | Key | Used by | Notes |
@@ -57,6 +69,20 @@ semantic model の最初の実装は `P1` を優先するのが妥当です。
 | `forcethreshold` | `breakablefloat` | 破断閾値 |
 | `torquethreshold` | `breakablefloat` | 破断閾値 |
 
+### joint type ごとの key 実装
+
+| Joint type | Accepted keys |
+| --- | --- |
+| `fixed` | 追加 key なし |
+| `revolute` | `dis`, `min`, `max`, `stiffness`, `viscosity`, `coulomb`, `staticfriction`, `motor` |
+| `prismatic` | `dis`, `min`, `max`, `stiffness`, `viscosity`, `coulomb`, `staticfriction`, `motor` |
+| `cylindrical` | `dis`, `min`, `max`, `stiffness`, `viscosity`, `coulomb`, `staticfriction` |
+| `hooke` | `dis`, `min`, `max`, `stiffness`, `viscosity`, `coulomb`, `staticfriction` |
+| `spherical` | `dis`, `motor` |
+| `planar` | `dis` |
+| `float` | `dis` |
+| `breakablefloat` | `dis`, `forcethreshold`, `torquethreshold` |
+
 ### 確認できた joint type
 
 - `fixed`
@@ -68,6 +94,23 @@ semantic model の最初の実装は `P1` を優先するのが妥当です。
 - `planar`
 - `float`
 - `breakablefloat`
+
+## `roki::contact`
+
+| Key | 意味 | Notes |
+| --- | --- | --- |
+| `bind` | stuff の組 | 2 要素 |
+| `staticfriction` | 静止摩擦係数 | |
+| `kineticfriction` | 動摩擦係数 | rigid / elastic 共通 |
+| `compensation` | 剛体接触補償係数 | rigid group |
+| `relaxation` | 剛体接触緩和係数 | rigid group |
+| `elasticity` | 弾性係数 | elastic group |
+| `viscosity` | 粘性係数 | elastic group |
+
+補足:
+
+- `compensation` / `relaxation` と `elasticity` / `viscosity` は排他的な group で、upstream では source-order 上で最後に見つかった group が active type を決める
+- `ztk-ts` では全 raw 値を保持した上で `contactType` を `rigid` / `elastic` として解釈し、normalized serializer は active type の group のみ再出力する
 
 ## `roki::motor`
 
@@ -112,6 +155,13 @@ semantic model の最初の実装は `P1` を優先するのが妥当です。
 | `rot` | 回転操作 | 繰り返しの可能性あり |
 | `frame` | 変換 | |
 
+補足:
+
+- `mirror` は `<shapeName> <axis>` を保持し、name 参照解決も行う
+- `sphere` / `cone` / `cylinder` / `capsule` の repeated primitive key は `zeo` 実装同様に必要数だけ消費し、余分な値は unknown key にしない
+- `polyhedron` の `loop` は procedural token 列として保持し、normalized serializer で再出力する
+- `nurbs` の `dim` は semantic で保持する
+
 ### type 別 key
 
 | Type | Keys |
@@ -149,6 +199,64 @@ semantic model の最初の実装は `P1` を優先するのが妥当です。
 | `coord` | UV 座標 |
 | `face` | UV face |
 
+補足:
+
+- `coord` と `face` は repeated key
+- upstream 実装では `coord` が 1 件も無い texture は warning 扱いで読めない
+- `type` は `color` / `bump` を確認
+- `depth` は `bump` のときだけ出力される
+- `ztk-ts` では `coord` を `{ index, uv }`、`face` を index triple として semantic 化している
+
+## `roki::chain::ik`
+
+| Key | 意味 | Notes |
+| --- | --- | --- |
+| `joint` | IK 対象関節 | `<linkName> [weight] [joint displacement...]` 形式。`all` も許可 |
+| `constraint` | IK 制約 | `<priority> <name> <type> ...` 形式。残り payload は `type` ごとに異なる |
+
+### `constraint` type
+
+| Type | Payload |
+| --- | --- |
+| `world_pos` | link 名 1 個, 任意で attention point, 任意で weight |
+| `world_att` | link 名 1 個, 任意で weight |
+| `l2l_pos` | link 名 2 個まで, 任意で attention point, 任意で weight |
+| `l2l_att` | link 名 2 個まで, 任意で weight |
+| `com` | 任意で weight |
+| `angular_momentum` | 任意で attention point, 任意で weight |
+| `angular_momentum_about_com` | 任意で weight |
+
+補足:
+
+- `constraint` の追加 payload は key-value ではなく token 列
+- `weight` は 3 要素、`attention point` も 3 要素で parser 側では位置依存に近い解釈になる
+- `ztk-ts` では既知 type に対して `linkNames` / `attentionPoint` / `weight` を構造化し、未知部分は token 列で保持する
+
+## `zeo::map`
+
+| Key | 意味 | Notes |
+| --- | --- | --- |
+| `name` | map 名 | |
+| `type` | map type | upstream 実装では `terra` を確認 |
+
+### `terra` type 別 key
+
+| Key | 意味 |
+| --- | --- |
+| `origin` | 原点 |
+| `resolution` | グリッド解像度 |
+| `size` | グリッドサイズ |
+| `zrange` | 高さ範囲 |
+| `th_var` | 可走判定しきい値 |
+| `th_grd` | 勾配しきい値 |
+| `th_res` | 分解能しきい値 |
+| `grid` | セル本体 |
+
+補足:
+
+- `ztk-ts` では `grid` を `(i, j, z, nx, ny, nz, var, travs)` の structured record として保持している
+- `th_grd` は upstream printer では度数法で出力されるため、semantic でも raw degree 値を保持する
+
 ## AST で必ず保持するもの
 
 - repeated `shape`
@@ -158,3 +266,4 @@ semantic model の最初の実装は `P1` を優先するのが妥当です。
 - repeated `rot`
 - repeated `joint`
 - repeated `constraint`
+- repeated `grid`

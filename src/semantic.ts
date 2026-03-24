@@ -7,8 +7,11 @@ export type ZtkDiagnostic = {
   key?: string;
 };
 
+export type ZtkVec2 = [number, number];
 export type ZtkVec3 = [number, number, number];
 export type ZtkMat3 = [number, number, number, number, number, number, number, number, number];
+export type ZtkAutoOrVec3 = ZtkVec3 | 'auto';
+export type ZtkAutoOrMat3 = ZtkMat3 | 'auto';
 export type ZtkMat3x4 = [
   number,
   number,
@@ -64,6 +67,43 @@ export type ZtkChainInitJointState = {
   link?: ZtkLink;
 };
 
+export type ZtkIkJoint = {
+  selector: string;
+  weight?: number;
+  values: number[];
+  link?: ZtkLink;
+};
+
+export type ZtkIkConstraintType =
+  | 'world_pos'
+  | 'world_att'
+  | 'l2l_pos'
+  | 'l2l_att'
+  | 'com'
+  | 'angular_momentum'
+  | 'angular_momentum_about_com'
+  | string;
+
+export type ZtkIkConstraint = {
+  priority?: number;
+  name?: string;
+  type?: ZtkIkConstraintType;
+  tokens: string[];
+  linkNames: string[];
+  links: ZtkLink[];
+  attentionPoint?: ZtkVec3;
+  weight?: ZtkVec3;
+  unknownTokens: string[];
+};
+
+export type ZtkChainIk = {
+  tag: 'roki::chain::ik';
+  section: ZtkSection;
+  joints: ZtkIkJoint[];
+  constraints: ZtkIkConstraint[];
+  unknownKeys: ZtkKeyValueNode[];
+};
+
 export type ZtkMotorType = 'none' | 'dc' | 'trq' | string;
 
 export type ZtkMotor = {
@@ -82,6 +122,22 @@ export type ZtkMotor = {
   gearInertia?: number;
   compK?: number;
   compL?: number;
+  unknownKeys: ZtkKeyValueNode[];
+};
+
+export type ZtkContactType = 'rigid' | 'elastic';
+
+export type ZtkContact = {
+  tag: 'roki::contact';
+  section: ZtkSection;
+  bind?: [string, string];
+  staticFriction?: number;
+  kineticFriction?: number;
+  compensation?: number;
+  relaxation?: number;
+  elasticity?: number;
+  viscosity?: number;
+  contactType?: ZtkContactType;
   unknownKeys: ZtkKeyValueNode[];
 };
 
@@ -106,11 +162,12 @@ export type ZtkLink = {
   mass?: number;
   density?: number;
   stuff?: string;
-  com?: ZtkVec3;
-  inertia?: ZtkMat3;
+  com?: ZtkAutoOrVec3;
+  inertia?: ZtkAutoOrMat3;
   massProperties: ZtkMassProperties;
   transform: ZtkTransform;
   dis?: number[];
+  breakValues?: number[];
   min?: number;
   max?: number;
   stiffness?: number;
@@ -150,6 +207,7 @@ export type ZtkJointSpec = {
   dof?: number;
   isActive: boolean;
   displacement?: number[];
+  breakThresholds?: number[];
   min?: number;
   max?: number;
   stiffness?: number;
@@ -166,8 +224,8 @@ export type ZtkMassProperties = {
   mass?: number;
   density?: number;
   stuff?: string;
-  com?: ZtkVec3;
-  inertia?: ZtkMat3;
+  com?: ZtkAutoOrVec3;
+  inertia?: ZtkAutoOrMat3;
 };
 
 export type ZtkOptic = {
@@ -180,6 +238,57 @@ export type ZtkOptic = {
   esr?: number;
   shininess?: number;
   alpha?: number;
+  unknownKeys: ZtkKeyValueNode[];
+};
+
+export type ZtkTextureType = 'color' | 'bump' | string;
+
+export type ZtkTextureCoord = {
+  index: number;
+  uv: ZtkVec2;
+};
+
+export type ZtkTextureFace = {
+  indices: [number, number, number];
+};
+
+export type ZtkTexture = {
+  tag: 'zeo::texture';
+  section: ZtkSection;
+  name?: string;
+  file?: string;
+  type?: ZtkTextureType;
+  depth?: number;
+  coords: ZtkTextureCoord[];
+  faces: ZtkTextureFace[];
+  unknownKeys: ZtkKeyValueNode[];
+};
+
+export type ZtkMapTerraGrid = {
+  index: [number, number];
+  z: number;
+  normal: ZtkVec3;
+  variance: number;
+  traversable: boolean;
+};
+
+export type ZtkMapTerra = {
+  origin?: [number, number];
+  resolution?: [number, number];
+  size?: [number, number];
+  zrange?: [number, number];
+  thVar?: number;
+  thGrid?: number;
+  thRes?: number;
+  grids: ZtkMapTerraGrid[];
+};
+
+export type ZtkMap = {
+  tag: 'zeo::map';
+  section: ZtkSection;
+  name?: string;
+  type?: string;
+  terra?: ZtkMapTerra;
   unknownKeys: ZtkKeyValueNode[];
 };
 
@@ -242,11 +351,13 @@ export type ZtkShapeGeometry =
       vertices: number[][];
       faces: number[][];
       loops: number[][];
+      proceduralLoops: string[][];
       prisms: number[][];
       pyramids: number[][];
     }
   | {
       type: 'nurbs';
+      dim?: number[];
       uKnots: number[][];
       vKnots: number[][];
       sizes: number[][];
@@ -264,9 +375,13 @@ export type ZtkShape = {
   type?: string;
   opticName?: string;
   textureName?: string;
+  texture?: ZtkTexture;
   mirrorName?: string;
+  mirrorAxis?: string;
   importName?: string;
+  importScale?: number;
   optic?: ZtkOptic;
+  mirror?: ZtkShape;
   transform: ZtkTransform;
   geometry: ZtkShapeGeometry;
   unknownKeys: ZtkKeyValueNode[];
@@ -276,10 +391,14 @@ export type ZtkSemanticDocument = {
   source: ZtkDocument;
   chain?: ZtkChain;
   chainInit?: ZtkChainInit;
+  chainIk?: ZtkChainIk;
   motors: ZtkMotor[];
+  contacts: ZtkContact[];
   links: ZtkLink[];
   optics: ZtkOptic[];
+  textures: ZtkTexture[];
   shapes: ZtkShape[];
+  maps: ZtkMap[];
   unknownSections: ZtkSection[];
   diagnostics: ZtkDiagnostic[];
 };
@@ -313,6 +432,7 @@ function parseJointSpec(
   jointType: string | undefined,
   values: {
     dis?: number[];
+    breakValues?: number[];
     min?: number;
     max?: number;
     stiffness?: number;
@@ -353,6 +473,7 @@ function parseJointSpec(
     dof,
     isActive,
     displacement: values.dis,
+    breakThresholds: values.breakValues,
     min: values.min,
     max: values.max,
     stiffness: values.stiffness,
@@ -419,6 +540,10 @@ function parseNumberList(
   return values;
 }
 
+function isNumericTokenList(values: string[]): boolean {
+  return values.every((token) => !Number.isNaN(Number(token)));
+}
+
 function parseJointState(
   node: ZtkKeyValueNode,
   diagnostics: ZtkDiagnostic[],
@@ -457,6 +582,22 @@ function parseJointState(
   };
 }
 
+function parseNamedJointState(node: ZtkKeyValueNode): ZtkChainInitJointState | undefined {
+  const values: number[] = [];
+  for (const token of node.values) {
+    const num = Number(token);
+    if (Number.isNaN(num)) {
+      return undefined;
+    }
+    values.push(num);
+  }
+
+  return {
+    linkName: node.key,
+    values,
+  };
+}
+
 function parseVec3(
   node: ZtkKeyValueNode | undefined,
   diagnostics: ZtkDiagnostic[],
@@ -476,6 +617,27 @@ function parseVec3(
     return undefined;
   }
   return [values[0], values[1], values[2]];
+}
+
+function parseVec2(
+  node: ZtkKeyValueNode | undefined,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkVec2 | undefined {
+  const values = parseNumberList(node, diagnostics, tag);
+  if (!values) {
+    return undefined;
+  }
+  if (values.length < 2) {
+    diagnostics.push({
+      code: 'invalid-arity',
+      message: `Expected 2 numbers but got ${values.length}`,
+      tag,
+      key: node?.key,
+    });
+    return undefined;
+  }
+  return [values[0], values[1]];
 }
 
 function parseMat3(
@@ -558,6 +720,36 @@ function parseAxis(
   return parseVec3(node, diagnostics, tag);
 }
 
+function parseVec3OrAuto(
+  node: ZtkKeyValueNode | undefined,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkAutoOrVec3 | undefined {
+  const text = parseText(node);
+  if (text === undefined) {
+    return undefined;
+  }
+  if (text === 'auto') {
+    return 'auto';
+  }
+  return parseVec3(node, diagnostics, tag);
+}
+
+function parseMat3OrAuto(
+  node: ZtkKeyValueNode | undefined,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkAutoOrMat3 | undefined {
+  const text = parseText(node);
+  if (text === undefined) {
+    return undefined;
+  }
+  if (text === 'auto') {
+    return 'auto';
+  }
+  return parseMat3(node, diagnostics, tag);
+}
+
 function createIdentityMat3(): ZtkMat3 {
   return [1, 0, 0, 0, 1, 0, 0, 0, 1];
 }
@@ -616,6 +808,97 @@ function createResolvedFromPosAtt(pos?: ZtkVec3, att?: ZtkMat3): ZtkResolvedTran
   };
 }
 
+function createResolvedFromDh(dh: number[]): ZtkResolvedTransform | undefined {
+  if (dh.length < 4) {
+    return undefined;
+  }
+
+  const [a, alpha, d, theta] = dh;
+  const sa = Math.sin(alpha);
+  const ca = Math.cos(alpha);
+  const st = Math.sin(theta);
+  const ct = Math.cos(theta);
+
+  return createResolvedFromPosAtt(
+    [a, -d * sa, d * ca],
+    [ct, -st, 0, ca * st, ca * ct, -sa, sa * st, sa * ct, ca],
+  );
+}
+
+function multiplyMat3(left: ZtkMat3, right: ZtkMat3): ZtkMat3 {
+  return [
+    left[0] * right[0] + left[1] * right[3] + left[2] * right[6],
+    left[0] * right[1] + left[1] * right[4] + left[2] * right[7],
+    left[0] * right[2] + left[1] * right[5] + left[2] * right[8],
+    left[3] * right[0] + left[4] * right[3] + left[5] * right[6],
+    left[3] * right[1] + left[4] * right[4] + left[5] * right[7],
+    left[3] * right[2] + left[4] * right[5] + left[5] * right[8],
+    left[6] * right[0] + left[7] * right[3] + left[8] * right[6],
+    left[6] * right[1] + left[7] * right[4] + left[8] * right[7],
+    left[6] * right[2] + left[7] * right[5] + left[8] * right[8],
+  ];
+}
+
+function createMat3FromAngleAxis(angleAxis: ZtkVec3): ZtkMat3 {
+  const [x, y, z] = angleAxis;
+  const angle = Math.hypot(x, y, z);
+  if (angle === 0) {
+    return createIdentityMat3();
+  }
+
+  const axisX = x / angle;
+  const axisY = y / angle;
+  const axisZ = z / angle;
+  const sin = Math.sin(angle);
+  const cos = Math.cos(angle);
+  const t = 1 - cos;
+
+  return [
+    t * axisX * axisX + cos,
+    t * axisX * axisY - sin * axisZ,
+    t * axisX * axisZ + sin * axisY,
+    t * axisY * axisX + sin * axisZ,
+    t * axisY * axisY + cos,
+    t * axisY * axisZ - sin * axisX,
+    t * axisZ * axisX - sin * axisY,
+    t * axisZ * axisY + sin * axisX,
+    t * axisZ * axisZ + cos,
+  ];
+}
+
+function parseAngleAxisRotation(
+  node: ZtkKeyValueNode,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkVec3 | undefined {
+  const values = parseNumberList(node, diagnostics, tag);
+  if (!values) {
+    return undefined;
+  }
+  if (values.length < 4) {
+    diagnostics.push({
+      code: 'invalid-arity',
+      message: `Expected 4 numbers but got ${values.length}`,
+      tag,
+      key: node.key,
+    });
+    return undefined;
+  }
+
+  const [axisX, axisY, axisZ, angleInDegrees] = values;
+  const axisLength = Math.hypot(axisX, axisY, axisZ);
+  if (axisLength === 0) {
+    return [0, 0, 0];
+  }
+
+  const angleInRadians = (angleInDegrees * Math.PI) / 180;
+  return [
+    (axisX / axisLength) * angleInRadians,
+    (axisY / axisLength) * angleInRadians,
+    (axisZ / axisLength) * angleInRadians,
+  ];
+}
+
 function createIdentityTransform(): ZtkResolvedTransform {
   const pos = createZeroVec3();
   const att = createIdentityMat3();
@@ -628,49 +911,78 @@ function createIdentityTransform(): ZtkResolvedTransform {
 }
 
 function resolveTransform(
-  raw: Pick<ZtkTransform, 'pos' | 'att' | 'frame' | 'rotations' | 'dh'>,
+  nodes: ZtkKeyValueNode[],
+  _raw: Pick<ZtkTransform, 'pos' | 'att' | 'frame' | 'rotations' | 'dh'>,
   diagnostics: ZtkDiagnostic[],
   tag: string | null,
 ): ZtkResolvedTransform {
-  if (raw.frame) {
-    if (raw.pos || raw.att || raw.rotations.length > 0 || raw.dh) {
-      diagnostics.push({
-        code: 'conflicting-transform',
-        message: 'frame takes precedence over pos/att/rot/DH in semantic resolution',
-        tag,
-      });
+  let pos = createZeroVec3();
+  let att = createIdentityMat3();
+  let mode: ZtkResolvedTransformMode = 'identity';
+
+  for (const node of nodes) {
+    switch (node.key) {
+      case 'pos': {
+        const value = parseVec3(node, diagnostics, tag);
+        if (value) {
+          pos = value;
+          mode = mode === 'identity' ? 'pos_att' : mode;
+        }
+        break;
+      }
+      case 'att': {
+        const value = parseMat3(node, diagnostics, tag);
+        if (value) {
+          att = value;
+          mode = mode === 'identity' ? 'pos_att' : mode;
+        }
+        break;
+      }
+      case 'rot': {
+        const angleAxis = parseAngleAxisRotation(node, diagnostics, tag);
+        if (angleAxis) {
+          att = multiplyMat3(createMat3FromAngleAxis(angleAxis), att);
+          mode = mode === 'identity' ? 'pos_att' : mode;
+        }
+        break;
+      }
+      case 'frame': {
+        const value = parseMat3x4(node, diagnostics, tag);
+        if (value) {
+          const resolved = createResolvedFromFrame(value);
+          pos = resolved.pos;
+          att = resolved.att;
+          mode = 'frame';
+        }
+        break;
+      }
+      case 'DH': {
+        const value = parseNumberList(node, diagnostics, tag);
+        if (value) {
+          const resolved = createResolvedFromDh(value);
+          if (resolved) {
+            pos = resolved.pos;
+            att = resolved.att;
+            mode = 'frame';
+          }
+        }
+        break;
+      }
+      default:
+        break;
     }
-    return createResolvedFromFrame(raw.frame);
   }
 
-  if (raw.pos || raw.att) {
-    if (raw.rotations.length > 0 || raw.dh) {
-      diagnostics.push({
-        code: 'conflicting-transform',
-        message: 'pos/att takes precedence over rot/DH in semantic resolution',
-        tag,
-      });
-    }
-    return createResolvedFromPosAtt(raw.pos, raw.att);
+  if (mode === 'identity') {
+    return createIdentityTransform();
   }
 
-  if (raw.rotations.length > 0 || raw.dh) {
-    diagnostics.push({
-      code: 'unsupported-transform',
-      message: 'rot and DH are preserved but not yet resolved into an effective frame',
-      tag,
-    });
-
-    const identity = createIdentityTransform();
-    return {
-      mode: 'procedural',
-      pos: identity.pos,
-      att: identity.att,
-      frame: identity.frame,
-    };
-  }
-
-  return createIdentityTransform();
+  return {
+    mode,
+    pos,
+    att,
+    frame: createFrameFromPosAtt(pos, att),
+  };
 }
 
 function createEntries(section: ZtkSection): Map<string, ZtkKeyValueNode[]> {
@@ -692,6 +1004,14 @@ function first(entries: Map<string, ZtkKeyValueNode[]>, key: string): ZtkKeyValu
 
 function all(entries: Map<string, ZtkKeyValueNode[]>, key: string): ZtkKeyValueNode[] {
   return entries.get(key) ?? [];
+}
+
+function take(
+  entries: Map<string, ZtkKeyValueNode[]>,
+  key: string,
+  count: number,
+): ZtkKeyValueNode[] {
+  return all(entries, key).slice(0, count);
 }
 
 function markUsed(
@@ -717,34 +1037,43 @@ function unknownKeys(section: ZtkSection, used: Set<ZtkKeyValueNode>): ZtkKeyVal
 }
 
 function parseTransform(
+  section: ZtkSection,
   entries: Map<string, ZtkKeyValueNode[]>,
   used: Set<ZtkKeyValueNode>,
   diagnostics: ZtkDiagnostic[],
   tag: string | null,
 ): ZtkTransform {
-  const posNode = first(entries, 'pos');
-  const attNode = first(entries, 'att');
-  const frameNode = first(entries, 'frame');
-  const dhNode = first(entries, 'DH');
+  const posNodes = all(entries, 'pos');
+  const attNodes = all(entries, 'att');
+  const frameNodes = all(entries, 'frame');
+  const dhNodes = all(entries, 'DH');
   const rotNodes = all(entries, 'rot');
+  const transformNodes = section.nodes.filter(
+    (node) =>
+      node.key === 'pos' ||
+      node.key === 'att' ||
+      node.key === 'rot' ||
+      node.key === 'frame' ||
+      node.key === 'DH',
+  );
 
-  markUsed(used, posNode);
-  markUsed(used, attNode);
-  markUsed(used, frameNode);
-  markUsed(used, dhNode);
+  markUsed(used, posNodes);
+  markUsed(used, attNodes);
+  markUsed(used, frameNodes);
+  markUsed(used, dhNodes);
   markUsed(used, rotNodes);
 
   const rawTransform = {
-    pos: parseVec3(posNode, diagnostics, tag),
-    att: parseMat3(attNode, diagnostics, tag),
-    frame: parseMat3x4(frameNode, diagnostics, tag),
+    pos: parseVec3(posNodes[0], diagnostics, tag),
+    att: parseMat3(attNodes[0], diagnostics, tag),
+    frame: parseMat3x4(frameNodes[0], diagnostics, tag),
     rotations: rotNodes.map((node) => [...node.values]),
-    dh: parseNumberList(dhNode, diagnostics, tag),
+    dh: parseNumberList(dhNodes[0], diagnostics, tag),
   };
 
   return {
     ...rawTransform,
-    resolved: resolveTransform(rawTransform, diagnostics, tag),
+    resolved: resolveTransform(transformNodes, rawTransform, diagnostics, tag),
   };
 }
 
@@ -772,12 +1101,194 @@ function parseChainInit(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkC
     .map((node) => parseJointState(node, diagnostics, 'roki::chain::init'))
     .filter((value): value is ZtkChainInitJointState => value !== undefined);
 
+  for (const node of section.nodes) {
+    if (used.has(node)) {
+      continue;
+    }
+    if (
+      node.key !== 'pos' &&
+      node.key !== 'att' &&
+      node.key !== 'frame' &&
+      node.key !== 'DH' &&
+      node.key !== 'rot' &&
+      node.values.length > 0
+    ) {
+      const jointState = parseNamedJointState(node);
+      if (jointState) {
+        jointStates.push(jointState);
+        used.add(node);
+      }
+    }
+  }
+
   return {
     tag: 'roki::chain::init',
     section,
-    transform: parseTransform(entries, used, diagnostics, 'roki::chain::init'),
+    transform: parseTransform(section, entries, used, diagnostics, 'roki::chain::init'),
     joints: jointStates.map((jointState) => jointState.values),
     jointStates,
+    unknownKeys: unknownKeys(section, used),
+  };
+}
+
+function parseIkJoint(
+  node: ZtkKeyValueNode,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkIkJoint | undefined {
+  const [selector, weightToken, ...valueTokens] = node.values;
+  if (!selector) {
+    return undefined;
+  }
+
+  let weight: number | undefined;
+  let values = valueTokens;
+  if (weightToken) {
+    const parsed = Number(weightToken);
+    if (Number.isFinite(parsed)) {
+      weight = parsed;
+    } else {
+      values = [weightToken, ...valueTokens];
+    }
+  }
+
+  const parsedValues: number[] = [];
+  for (const token of values) {
+    const parsed = Number(token);
+    if (!Number.isFinite(parsed)) {
+      diagnostics.push({
+        code: 'invalid-number',
+        message: `Could not parse number "${token}"`,
+        tag,
+        key: node.key,
+      });
+      continue;
+    }
+    parsedValues.push(parsed);
+  }
+
+  return {
+    selector,
+    weight,
+    values: parsedValues,
+  };
+}
+
+function parseIkVec3At(
+  tokens: string[],
+  index: number,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+  key: string,
+): { value?: ZtkVec3; nextIndex: number } {
+  const values = tokens.slice(index + 1, index + 4).map((token) => Number(token));
+  if (values.length < 3 || values.some((value) => !Number.isFinite(value))) {
+    diagnostics.push({
+      code: 'invalid-number',
+      message: `Could not parse vec3 near "${tokens[index]}"`,
+      tag,
+      key,
+    });
+    return { nextIndex: Math.min(index + 4, tokens.length) };
+  }
+  return {
+    value: [values[0], values[1], values[2]],
+    nextIndex: index + 4,
+  };
+}
+
+function parseIkConstraint(
+  node: ZtkKeyValueNode,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkIkConstraint | undefined {
+  const [priorityToken, name, type, ...payload] = node.values;
+  if (!priorityToken || !name || !type) {
+    diagnostics.push({
+      code: 'invalid-arity',
+      message: `Expected at least 3 values but got ${node.values.length}`,
+      tag,
+      key: node.key,
+    });
+    return undefined;
+  }
+
+  const priority = Number(priorityToken);
+  if (!Number.isFinite(priority)) {
+    diagnostics.push({
+      code: 'invalid-number',
+      message: `Could not parse number "${priorityToken}"`,
+      tag,
+      key: node.key,
+    });
+  }
+
+  const constraint: ZtkIkConstraint = {
+    priority: Number.isFinite(priority) ? priority : undefined,
+    name,
+    type,
+    tokens: [...payload],
+    linkNames: [],
+    links: [],
+    unknownTokens: [],
+  };
+
+  let index = 0;
+  while (index < payload.length) {
+    const token = payload[index];
+    if (token === 'at') {
+      const parsed = parseIkVec3At(payload, index, diagnostics, tag, node.key);
+      if (parsed.value) {
+        constraint.attentionPoint = parsed.value;
+      }
+      index = parsed.nextIndex;
+      continue;
+    }
+    if (token === 'w') {
+      const parsed = parseIkVec3At(payload, index, diagnostics, tag, node.key);
+      if (parsed.value) {
+        constraint.weight = parsed.value;
+      }
+      index = parsed.nextIndex;
+      continue;
+    }
+
+    const acceptsLinks =
+      type === 'world_pos' || type === 'world_att' || type === 'l2l_pos' || type === 'l2l_att';
+    const maxLinks =
+      type === 'l2l_pos' || type === 'l2l_att'
+        ? 2
+        : type === 'world_pos' || type === 'world_att'
+          ? 1
+          : 0;
+    if (acceptsLinks && constraint.linkNames.length < maxLinks) {
+      constraint.linkNames.push(token);
+    } else {
+      constraint.unknownTokens.push(token);
+    }
+    index += 1;
+  }
+
+  return constraint;
+}
+
+function parseChainIk(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkChainIk {
+  const entries = createEntries(section);
+  const used = new Set<ZtkKeyValueNode>();
+  const jointNodes = all(entries, 'joint');
+  const constraintNodes = all(entries, 'constraint');
+  markUsed(used, jointNodes);
+  markUsed(used, constraintNodes);
+
+  return {
+    tag: 'roki::chain::ik',
+    section,
+    joints: jointNodes
+      .map((node) => parseIkJoint(node, diagnostics, 'roki::chain::ik'))
+      .filter((value): value is ZtkIkJoint => value !== undefined),
+    constraints: constraintNodes
+      .map((node) => parseIkConstraint(node, diagnostics, 'roki::chain::ik'))
+      .filter((value): value is ZtkIkConstraint => value !== undefined),
     unknownKeys: unknownKeys(section, used),
   };
 }
@@ -836,6 +1347,64 @@ function parseMotor(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkMotor
   };
 }
 
+function parseBindPair(node: ZtkKeyValueNode | undefined): [string, string] | undefined {
+  const firstValue = node?.values[0];
+  const secondValue = node?.values[1];
+  if (!firstValue || !secondValue) {
+    return undefined;
+  }
+  return [firstValue, secondValue];
+}
+
+function inferContactType(section: ZtkSection): ZtkContactType | undefined {
+  let contactType: ZtkContactType | undefined;
+  for (const node of section.nodes) {
+    if (node.key === 'compensation' || node.key === 'relaxation') {
+      contactType = 'rigid';
+    }
+    if (node.key === 'elasticity' || node.key === 'viscosity') {
+      contactType = 'elastic';
+    }
+  }
+  return contactType;
+}
+
+function parseContact(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkContact {
+  const entries = createEntries(section);
+  const used = new Set<ZtkKeyValueNode>();
+  const bindNode = first(entries, 'bind');
+  const staticFrictionNode = first(entries, 'staticfriction');
+  const kineticFrictionNode = first(entries, 'kineticfriction');
+  const compensationNode = first(entries, 'compensation');
+  const relaxationNode = first(entries, 'relaxation');
+  const elasticityNode = first(entries, 'elasticity');
+  const viscosityNode = first(entries, 'viscosity');
+
+  markUsed(used, [
+    bindNode,
+    staticFrictionNode,
+    kineticFrictionNode,
+    compensationNode,
+    relaxationNode,
+    elasticityNode,
+    viscosityNode,
+  ]);
+
+  return {
+    tag: 'roki::contact',
+    section,
+    bind: parseBindPair(bindNode),
+    staticFriction: parseNumberValue(staticFrictionNode, diagnostics, 'roki::contact'),
+    kineticFriction: parseNumberValue(kineticFrictionNode, diagnostics, 'roki::contact'),
+    compensation: parseNumberValue(compensationNode, diagnostics, 'roki::contact'),
+    relaxation: parseNumberValue(relaxationNode, diagnostics, 'roki::contact'),
+    elasticity: parseNumberValue(elasticityNode, diagnostics, 'roki::contact'),
+    viscosity: parseNumberValue(viscosityNode, diagnostics, 'roki::contact'),
+    contactType: inferContactType(section),
+    unknownKeys: unknownKeys(section, used),
+  };
+}
+
 function parseLink(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkLink {
   const entries = createEntries(section);
   const used = new Set<ZtkKeyValueNode>();
@@ -851,9 +1420,10 @@ function parseLink(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkLink {
   const minNode = first(entries, 'min');
   const maxNode = first(entries, 'max');
   const stiffnessNode = first(entries, 'stiffness');
-  const viscosityNode = first(entries, 'viscosity');
+  const viscosityNode = first(entries, 'viscosity') ?? first(entries, 'viscos');
   const coulombNode = first(entries, 'coulomb');
   const staticFrictionNode = first(entries, 'staticfriction');
+  const breakNode = first(entries, 'break');
   const motorNode = first(entries, 'motor');
   const forceThresholdNode = first(entries, 'forcethreshold');
   const torqueThresholdNode = first(entries, 'torquethreshold');
@@ -876,6 +1446,7 @@ function parseLink(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkLink {
     viscosityNode,
     coulombNode,
     staticFrictionNode,
+    breakNode,
     motorNode,
     forceThresholdNode,
     torqueThresholdNode,
@@ -888,8 +1459,8 @@ function parseLink(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkLink {
   const mass = parseNumberValue(massNode, diagnostics, 'roki::link');
   const density = parseNumberValue(densityNode, diagnostics, 'roki::link');
   const stuff = parseText(stuffNode);
-  const com = parseVec3(comNode, diagnostics, 'roki::link');
-  const inertia = parseMat3(inertiaNode, diagnostics, 'roki::link');
+  const com = parseVec3OrAuto(comNode, diagnostics, 'roki::link');
+  const inertia = parseMat3OrAuto(inertiaNode, diagnostics, 'roki::link');
   const dis = parseNumberList(disNode, diagnostics, 'roki::link');
   const min = parseNumberValue(minNode, diagnostics, 'roki::link');
   const max = parseNumberValue(maxNode, diagnostics, 'roki::link');
@@ -897,6 +1468,7 @@ function parseLink(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkLink {
   const viscosity = parseNumberValue(viscosityNode, diagnostics, 'roki::link');
   const coulomb = parseNumberValue(coulombNode, diagnostics, 'roki::link');
   const staticFriction = parseNumberValue(staticFrictionNode, diagnostics, 'roki::link');
+  const breakValues = parseNumberList(breakNode, diagnostics, 'roki::link');
   const forceThreshold = parseNumberValue(forceThresholdNode, diagnostics, 'roki::link');
   const torqueThreshold = parseNumberValue(torqueThresholdNode, diagnostics, 'roki::link');
   const motorName = parseText(motorNode);
@@ -910,6 +1482,7 @@ function parseLink(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkLink {
       jointType,
       {
         dis,
+        breakValues,
         min,
         max,
         stiffness,
@@ -935,8 +1508,9 @@ function parseLink(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkLink {
       com,
       inertia,
     },
-    transform: parseTransform(entries, used, diagnostics, 'roki::link'),
+    transform: parseTransform(section, entries, used, diagnostics, 'roki::link'),
     dis,
+    breakValues,
     min,
     max,
     stiffness,
@@ -993,6 +1567,115 @@ function parseOptic(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkOptic
   };
 }
 
+function parseTextureCoord(
+  node: ZtkKeyValueNode,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkTextureCoord | undefined {
+  const values = parseNumberList(node, diagnostics, tag);
+  if (!values) {
+    return undefined;
+  }
+  if (values.length < 3) {
+    diagnostics.push({
+      code: 'invalid-arity',
+      message: `Expected 3 numbers but got ${values.length}`,
+      tag,
+      key: node.key,
+    });
+    return undefined;
+  }
+  return {
+    index: values[0],
+    uv: [values[1], values[2]],
+  };
+}
+
+function parseTextureFace(
+  node: ZtkKeyValueNode,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkTextureFace | undefined {
+  const values = parseNumberList(node, diagnostics, tag);
+  if (!values) {
+    return undefined;
+  }
+  if (values.length < 3) {
+    diagnostics.push({
+      code: 'invalid-arity',
+      message: `Expected 3 numbers but got ${values.length}`,
+      tag,
+      key: node.key,
+    });
+    return undefined;
+  }
+  return {
+    indices: [values[0], values[1], values[2]],
+  };
+}
+
+function parseTexture(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkTexture {
+  const entries = createEntries(section);
+  const used = new Set<ZtkKeyValueNode>();
+
+  const nameNode = first(entries, 'name');
+  const fileNode = first(entries, 'file');
+  const typeNode = first(entries, 'type');
+  const depthNode = first(entries, 'depth');
+  const coordNodes = all(entries, 'coord');
+  const faceNodes = all(entries, 'face');
+
+  markUsed(used, [nameNode, fileNode, typeNode, depthNode]);
+  markUsed(used, coordNodes);
+  markUsed(used, faceNodes);
+
+  return {
+    tag: 'zeo::texture',
+    section,
+    name: parseText(nameNode),
+    file: parseText(fileNode),
+    type: parseText(typeNode),
+    depth: parseNumberValue(depthNode, diagnostics, 'zeo::texture'),
+    coords: coordNodes
+      .map((node) => parseTextureCoord(node, diagnostics, 'zeo::texture'))
+      .filter((value): value is ZtkTextureCoord => value !== undefined),
+    faces: faceNodes
+      .map((node) => parseTextureFace(node, diagnostics, 'zeo::texture'))
+      .filter((value): value is ZtkTextureFace => value !== undefined),
+    unknownKeys: unknownKeys(section, used),
+  };
+}
+
+function parseImport(
+  node: ZtkKeyValueNode | undefined,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): { name?: string; scale?: number } {
+  if (!node) {
+    return {};
+  }
+
+  const [name, scaleToken] = node.values;
+  if (!name) {
+    return {};
+  }
+  if (!scaleToken) {
+    return { name };
+  }
+
+  const scale = Number(scaleToken);
+  if (!Number.isFinite(scale)) {
+    diagnostics.push({
+      code: 'invalid-number',
+      message: `Could not parse number "${scaleToken}"`,
+      tag,
+      key: node.key,
+    });
+    return { name };
+  }
+  return { name, scale };
+}
+
 function parseShapeGeometry(
   type: string | undefined,
   entries: Map<string, ZtkKeyValueNode[]>,
@@ -1021,10 +1704,14 @@ function parseShapeGeometry(
       };
     }
     case 'sphere': {
-      const centerNode = first(entries, 'center');
-      const radiusNode = first(entries, 'radius');
+      const centerNodes = all(entries, 'center');
+      const radiusNodes = all(entries, 'radius');
       const divNode = first(entries, 'div');
-      markUsed(used, [centerNode, radiusNode, divNode]);
+      const centerNode = centerNodes[0];
+      const radiusNode = radiusNodes[0];
+      markUsed(used, centerNodes);
+      markUsed(used, radiusNodes);
+      markUsed(used, divNode);
       return {
         type,
         center: parseVec3(centerNode, diagnostics, 'zeo::shape'),
@@ -1033,11 +1720,14 @@ function parseShapeGeometry(
       };
     }
     case 'cylinder': {
-      const centerNodes = all(entries, 'center');
-      const radiusNode = first(entries, 'radius');
+      const allCenterNodes = all(entries, 'center');
+      const centerNodes = take(entries, 'center', 2);
+      const radiusNodes = all(entries, 'radius');
       const divNode = first(entries, 'div');
-      markUsed(used, centerNodes);
-      markUsed(used, [radiusNode, divNode]);
+      const radiusNode = radiusNodes[0];
+      markUsed(used, allCenterNodes);
+      markUsed(used, radiusNodes);
+      markUsed(used, divNode);
       return {
         type,
         centers: centerNodes
@@ -1048,11 +1738,17 @@ function parseShapeGeometry(
       };
     }
     case 'cone': {
-      const centerNode = first(entries, 'center');
-      const vertNode = first(entries, 'vert');
-      const radiusNode = first(entries, 'radius');
+      const centerNodes = all(entries, 'center');
+      const vertNodes = all(entries, 'vert');
+      const radiusNodes = all(entries, 'radius');
       const divNode = first(entries, 'div');
-      markUsed(used, [centerNode, vertNode, radiusNode, divNode]);
+      const centerNode = centerNodes[0];
+      const vertNode = vertNodes[0];
+      const radiusNode = radiusNodes[0];
+      markUsed(used, centerNodes);
+      markUsed(used, vertNodes);
+      markUsed(used, radiusNodes);
+      markUsed(used, divNode);
       return {
         type,
         center: parseVec3(centerNode, diagnostics, 'zeo::shape'),
@@ -1062,11 +1758,14 @@ function parseShapeGeometry(
       };
     }
     case 'capsule': {
-      const centerNodes = all(entries, 'center');
-      const radiusNode = first(entries, 'radius');
+      const allCenterNodes = all(entries, 'center');
+      const centerNodes = take(entries, 'center', 2);
+      const radiusNodes = all(entries, 'radius');
       const divNode = first(entries, 'div');
-      markUsed(used, centerNodes);
-      markUsed(used, [radiusNode, divNode]);
+      const radiusNode = radiusNodes[0];
+      markUsed(used, allCenterNodes);
+      markUsed(used, radiusNodes);
+      markUsed(used, divNode);
       return {
         type,
         centers: centerNodes
@@ -1138,8 +1837,12 @@ function parseShapeGeometry(
           .map((node) => parseNumberList(node, diagnostics, 'zeo::shape'))
           .filter((value): value is number[] => value !== undefined),
         loops: loopNodes
+          .filter((node) => isNumericTokenList(node.values))
           .map((node) => parseNumberList(node, diagnostics, 'zeo::shape'))
           .filter((value): value is number[] => value !== undefined),
+        proceduralLoops: loopNodes
+          .filter((node) => !isNumericTokenList(node.values))
+          .map((node) => [...node.values]),
         prisms: prismNodes
           .map((node) => parseNumberList(node, diagnostics, 'zeo::shape'))
           .filter((value): value is number[] => value !== undefined),
@@ -1149,11 +1852,13 @@ function parseShapeGeometry(
       };
     }
     case 'nurbs': {
+      const dimNodes = all(entries, 'dim');
       const uknotNodes = all(entries, 'uknot');
       const vknotNodes = all(entries, 'vknot');
       const sizeNodes = all(entries, 'size');
       const cpNodes = all(entries, 'cp');
       const sliceNodes = all(entries, 'slice');
+      markUsed(used, dimNodes);
       markUsed(used, uknotNodes);
       markUsed(used, vknotNodes);
       markUsed(used, sizeNodes);
@@ -1161,6 +1866,10 @@ function parseShapeGeometry(
       markUsed(used, sliceNodes);
       return {
         type,
+        dim: dimNodes
+          .map((node) => parseNumberList(node, diagnostics, 'zeo::shape'))
+          .filter((value): value is number[] => value !== undefined)
+          .flat(),
         uKnots: uknotNodes
           .map((node) => parseNumberList(node, diagnostics, 'zeo::shape'))
           .filter((value): value is number[] => value !== undefined),
@@ -1193,10 +1902,13 @@ function parseShape(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkShape
   const textureNode = first(entries, 'texture');
   const mirrorNode = first(entries, 'mirror');
   const importNode = first(entries, 'import');
+  const parsedImport = parseImport(importNode, diagnostics, 'zeo::shape');
 
   markUsed(used, [nameNode, typeNode, opticNode, textureNode, mirrorNode, importNode]);
 
   const type = parseText(typeNode);
+  const mirrorName = mirrorNode?.values[0];
+  const mirrorAxis = mirrorNode?.values[1];
 
   return {
     tag: 'zeo::shape',
@@ -1205,10 +1917,93 @@ function parseShape(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkShape
     type,
     opticName: parseText(opticNode),
     textureName: parseText(textureNode),
-    mirrorName: parseText(mirrorNode),
-    importName: parseText(importNode),
-    transform: parseTransform(entries, used, diagnostics, 'zeo::shape'),
+    texture: undefined,
+    mirrorName,
+    mirrorAxis,
+    importName: parsedImport.name,
+    importScale: parsedImport.scale,
+    mirror: undefined,
+    transform: parseTransform(section, entries, used, diagnostics, 'zeo::shape'),
     geometry: parseShapeGeometry(type, entries, used, diagnostics),
+    unknownKeys: unknownKeys(section, used),
+  };
+}
+
+function parseMapTerraGrid(
+  node: ZtkKeyValueNode,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): ZtkMapTerraGrid | undefined {
+  const values = parseNumberList(node, diagnostics, tag);
+  if (!values) {
+    return undefined;
+  }
+  if (values.length < 8) {
+    diagnostics.push({
+      code: 'invalid-arity',
+      message: `Expected 8 numbers but got ${values.length}`,
+      tag,
+      key: node.key,
+    });
+    return undefined;
+  }
+  return {
+    index: [values[0], values[1]],
+    z: values[2],
+    normal: [values[3], values[4], values[5]],
+    variance: values[6],
+    traversable: values[7] !== 0,
+  };
+}
+
+function parsePair(
+  node: ZtkKeyValueNode | undefined,
+  diagnostics: ZtkDiagnostic[],
+  tag: string | null,
+): [number, number] | undefined {
+  const value = parseVec2(node, diagnostics, tag);
+  return value ? [value[0], value[1]] : undefined;
+}
+
+function parseMap(section: ZtkSection, diagnostics: ZtkDiagnostic[]): ZtkMap {
+  const entries = createEntries(section);
+  const used = new Set<ZtkKeyValueNode>();
+  const nameNode = first(entries, 'name');
+  const typeNode = first(entries, 'type');
+  const originNode = first(entries, 'origin');
+  const resolutionNode = first(entries, 'resolution');
+  const sizeNode = first(entries, 'size');
+  const zrangeNode = first(entries, 'zrange');
+  const thVarNode = first(entries, 'th_var');
+  const thGridNode = first(entries, 'th_grd');
+  const thResNode = first(entries, 'th_res');
+  const gridNodes = all(entries, 'grid');
+  const type = parseText(typeNode);
+
+  markUsed(used, [nameNode, typeNode, originNode, resolutionNode, sizeNode, zrangeNode]);
+  markUsed(used, [thVarNode, thGridNode, thResNode]);
+  markUsed(used, gridNodes);
+
+  return {
+    tag: 'zeo::map',
+    section,
+    name: parseText(nameNode),
+    type,
+    terra:
+      type === 'terra'
+        ? {
+            origin: parsePair(originNode, diagnostics, 'zeo::map'),
+            resolution: parsePair(resolutionNode, diagnostics, 'zeo::map'),
+            size: parsePair(sizeNode, diagnostics, 'zeo::map'),
+            zrange: parsePair(zrangeNode, diagnostics, 'zeo::map'),
+            thVar: parseNumberValue(thVarNode, diagnostics, 'zeo::map'),
+            thGrid: parseNumberValue(thGridNode, diagnostics, 'zeo::map'),
+            thRes: parseNumberValue(thResNode, diagnostics, 'zeo::map'),
+            grids: gridNodes
+              .map((node) => parseMapTerraGrid(node, diagnostics, 'zeo::map'))
+              .filter((value): value is ZtkMapTerraGrid => value !== undefined),
+          }
+        : undefined,
     unknownKeys: unknownKeys(section, used),
   };
 }
@@ -1334,20 +2129,93 @@ function resolveChainInit(
   }
 }
 
-function resolveShapes(shapes: ZtkShape[], optics: ZtkOptic[], diagnostics: ZtkDiagnostic[]): void {
-  const opticMap = indexByName(optics, diagnostics);
-  for (const shape of shapes) {
-    if (!shape.opticName) {
+function resolveChainIk(
+  chainIk: ZtkChainIk | undefined,
+  links: ZtkLink[],
+  diagnostics: ZtkDiagnostic[],
+): void {
+  if (!chainIk) {
+    return;
+  }
+
+  const linkMap = indexByName(links, diagnostics);
+  for (const joint of chainIk.joints) {
+    if (joint.selector === 'all') {
       continue;
     }
-    shape.optic = opticMap.get(shape.opticName);
-    if (!shape.optic) {
+    joint.link = linkMap.get(joint.selector);
+    if (!joint.link) {
       diagnostics.push({
         code: 'unresolved-reference',
-        message: `Shape "${shape.name ?? '(unnamed)'}" references missing optic "${shape.opticName}"`,
-        tag: shape.tag,
-        key: 'optic',
+        message: `Chain IK references missing link "${joint.selector}"`,
+        tag: 'roki::chain::ik',
+        key: 'joint',
       });
+    }
+  }
+
+  for (const constraint of chainIk.constraints) {
+    constraint.links = [];
+    for (const linkName of constraint.linkNames) {
+      const link = linkMap.get(linkName);
+      if (!link) {
+        diagnostics.push({
+          code: 'unresolved-reference',
+          message: `Chain IK constraint "${constraint.name ?? '(unnamed)'}" references missing link "${linkName}"`,
+          tag: 'roki::chain::ik',
+          key: 'constraint',
+        });
+        continue;
+      }
+      constraint.links.push(link);
+    }
+  }
+}
+
+function resolveShapes(
+  shapes: ZtkShape[],
+  optics: ZtkOptic[],
+  textures: ZtkTexture[],
+  diagnostics: ZtkDiagnostic[],
+): void {
+  const opticMap = indexByName(optics, diagnostics);
+  const textureMap = indexByName(textures, diagnostics);
+  const shapeMap = indexByName(shapes, diagnostics);
+  for (const shape of shapes) {
+    if (shape.opticName) {
+      shape.optic = opticMap.get(shape.opticName);
+      if (!shape.optic) {
+        diagnostics.push({
+          code: 'unresolved-reference',
+          message: `Shape "${shape.name ?? '(unnamed)'}" references missing optic "${shape.opticName}"`,
+          tag: shape.tag,
+          key: 'optic',
+        });
+      }
+    }
+
+    if (shape.textureName) {
+      shape.texture = textureMap.get(shape.textureName);
+      if (!shape.texture) {
+        diagnostics.push({
+          code: 'unresolved-reference',
+          message: `Shape "${shape.name ?? '(unnamed)'}" references missing texture "${shape.textureName}"`,
+          tag: shape.tag,
+          key: 'texture',
+        });
+      }
+    }
+
+    if (shape.mirrorName) {
+      shape.mirror = shapeMap.get(shape.mirrorName);
+      if (!shape.mirror) {
+        diagnostics.push({
+          code: 'unresolved-reference',
+          message: `Shape "${shape.name ?? '(unnamed)'}" references missing mirror source "${shape.mirrorName}"`,
+          tag: shape.tag,
+          key: 'mirror',
+        });
+      }
     }
   }
 }
@@ -1357,9 +2225,12 @@ export function resolveZtk(document: ZtkDocument): ZtkSemanticDocument {
   const model: ZtkSemanticDocument = {
     source: document,
     motors: [],
+    contacts: [],
     links: [],
     optics: [],
+    textures: [],
     shapes: [],
+    maps: [],
     unknownSections: [],
     diagnostics,
   };
@@ -1373,8 +2244,14 @@ export function resolveZtk(document: ZtkDocument): ZtkSemanticDocument {
       case 'roki::chain::init':
         model.chainInit = parseChainInit(section, diagnostics);
         break;
+      case 'roki::chain::ik':
+        model.chainIk = parseChainIk(section, diagnostics);
+        break;
       case 'roki::motor':
         model.motors.push(parseMotor(section, diagnostics));
+        break;
+      case 'roki::contact':
+        model.contacts.push(parseContact(section, diagnostics));
         break;
       case 'roki::link':
         model.links.push(parseLink(section, diagnostics));
@@ -1382,8 +2259,14 @@ export function resolveZtk(document: ZtkDocument): ZtkSemanticDocument {
       case 'zeo::optic':
         model.optics.push(parseOptic(section, diagnostics));
         break;
+      case 'zeo::texture':
+        model.textures.push(parseTexture(section, diagnostics));
+        break;
       case 'zeo::shape':
         model.shapes.push(parseShape(section, diagnostics));
+        break;
+      case 'zeo::map':
+        model.maps.push(parseMap(section, diagnostics));
         break;
       default:
         model.unknownSections.push(section);
@@ -1391,9 +2274,10 @@ export function resolveZtk(document: ZtkDocument): ZtkSemanticDocument {
     }
   }
 
-  resolveShapes(model.shapes, model.optics, diagnostics);
+  resolveShapes(model.shapes, model.optics, model.textures, diagnostics);
   resolveLinks(model.links, model.shapes, model.motors, diagnostics);
   resolveChainInit(model.chainInit, model.links, diagnostics);
+  resolveChainIk(model.chainIk, model.links, diagnostics);
 
   return model;
 }

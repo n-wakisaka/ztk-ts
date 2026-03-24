@@ -10,14 +10,25 @@ export type {
 export { createDocument, getSections } from './ast.js';
 export { parseZtk } from './parse.js';
 export type {
+  ZtkAutoOrMat3,
+  ZtkAutoOrVec3,
   ZtkChain,
+  ZtkChainIk,
   ZtkChainInit,
   ZtkChainInitJointState,
+  ZtkContact,
+  ZtkContactType,
   ZtkDiagnostic,
+  ZtkIkConstraint,
+  ZtkIkConstraintType,
+  ZtkIkJoint,
   ZtkJointBaseType,
   ZtkJointSpec,
   ZtkJointType,
   ZtkLink,
+  ZtkMap,
+  ZtkMapTerra,
+  ZtkMapTerraGrid,
   ZtkMassProperties,
   ZtkMat3,
   ZtkMat3x4,
@@ -29,7 +40,12 @@ export type {
   ZtkSemanticDocument,
   ZtkShape,
   ZtkShapeGeometry,
+  ZtkTexture,
+  ZtkTextureCoord,
+  ZtkTextureFace,
+  ZtkTextureType,
   ZtkTransform,
+  ZtkVec2,
   ZtkVec3,
 } from './semantic.js';
 export { resolveZtk } from './semantic.js';

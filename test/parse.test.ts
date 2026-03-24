@@ -40,4 +40,46 @@ inertia: {
     expect(inertia.values).toEqual(['1', '0', '0', '0', '2', '0', '0', '0', '3']);
     expect(inertia.rawLines).toHaveLength(5);
   });
+
+  test('parses indented continuation lines used by polyhedron loops', () => {
+    const document = parseZtk(`
+[zeo::shape]
+loop: z 0.02
+ -0.05 -0.06
+ arc cw 0.08 24
+ -0.05 0.06
+prism: 0 0 0.04
+`);
+
+    const section = getSections(document)[0];
+    const loop = section.nodes[0];
+
+    expect(loop.key).toBe('loop');
+    expect(loop.values).toEqual([
+      'z',
+      '0.02',
+      '-0.05',
+      '-0.06',
+      'arc',
+      'cw',
+      '0.08',
+      '24',
+      '-0.05',
+      '0.06',
+    ]);
+    expect(loop.rawLines).toHaveLength(4);
+    expect(section.nodes[1].key).toBe('prism');
+  });
+
+  test('strips inline percent comments from values', () => {
+    const document = parseZtk(`
+[zeo::shape]
+optic: cyan % ignored
+mirror: cone y % ignored
+`);
+
+    const section = getSections(document)[0];
+    expect(section.nodes[0].values).toEqual(['cyan']);
+    expect(section.nodes[1].values).toEqual(['cone', 'y']);
+  });
 });

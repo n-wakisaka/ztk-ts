@@ -1,9 +1,14 @@
 import { createDocument, type ZtkDocument, type ZtkKeyValueNode, type ZtkNode } from './ast.js';
 import type {
+  ZtkAutoOrMat3,
+  ZtkAutoOrVec3,
   ZtkChain,
+  ZtkChainIk,
   ZtkChainInit,
   ZtkChainInitJointState,
+  ZtkContact,
   ZtkLink,
+  ZtkMap,
   ZtkMat3,
   ZtkMat3x4,
   ZtkMotor,
@@ -11,6 +16,7 @@ import type {
   ZtkSemanticDocument,
   ZtkShape,
   ZtkShapeGeometry,
+  ZtkTexture,
   ZtkTransform,
   ZtkVec3,
 } from './semantic.js';
@@ -56,10 +62,18 @@ function formatVec3(value: ZtkVec3): string {
   return `{ ${value.map(formatNumber).join(', ')} }`;
 }
 
+function formatVec3OrAuto(value: ZtkAutoOrVec3): string {
+  return value === 'auto' ? value : formatVec3(value);
+}
+
 function formatMat3(value: ZtkMat3): string {
   return `{\n${value.slice(0, 3).join(', ')}\n${value.slice(3, 6).join(', ')}\n${value
     .slice(6, 9)
     .join(', ')}\n}`;
+}
+
+function formatMat3OrAuto(value: ZtkAutoOrMat3): string {
+  return value === 'auto' ? value : formatMat3(value);
 }
 
 function formatMat3x4(value: ZtkMat3x4): string {
@@ -143,6 +157,38 @@ function renderChainInit(chainInit: ZtkChainInit | undefined): ZtkNode[] {
   return nodes;
 }
 
+function renderChainIk(chainIk: ZtkChainIk | undefined): ZtkNode[] {
+  if (!chainIk) {
+    return [];
+  }
+
+  const nodes: ZtkNode[] = [createTagNode(chainIk.tag)];
+  for (const joint of chainIk.joints) {
+    const tokens = [
+      joint.selector,
+      joint.weight !== undefined ? formatNumber(joint.weight) : undefined,
+      ...joint.values.map(formatNumber),
+    ].filter((value): value is string => value !== undefined);
+    pushKeyValue(nodes, 'joint', tokens.join(' '));
+  }
+  for (const constraint of chainIk.constraints) {
+    const tokens = [
+      constraint.priority !== undefined ? formatNumber(constraint.priority) : undefined,
+      constraint.name,
+      constraint.type,
+      ...constraint.linkNames,
+      constraint.attentionPoint
+        ? ['at', ...constraint.attentionPoint.map(formatNumber)].join(' ')
+        : undefined,
+      constraint.weight ? ['w', ...constraint.weight.map(formatNumber)].join(' ') : undefined,
+      ...constraint.unknownTokens,
+    ].filter((value): value is string => value !== undefined);
+    pushKeyValue(nodes, 'constraint', tokens.join(' '));
+  }
+  nodes.push(...chainIk.unknownKeys.map(cloneKeyValueNode));
+  return nodes;
+}
+
 function renderMotor(motor: ZtkMotor): ZtkNode[] {
   const nodes: ZtkNode[] = [createTagNode(motor.tag)];
   pushKeyValue(nodes, 'name', motor.name);
@@ -190,6 +236,46 @@ function renderMotor(motor: ZtkMotor): ZtkNode[] {
   return nodes;
 }
 
+function renderContact(contact: ZtkContact): ZtkNode[] {
+  const nodes: ZtkNode[] = [createTagNode(contact.tag)];
+  pushKeyValue(nodes, 'bind', contact.bind ? contact.bind.join(' ') : undefined);
+  if (contact.contactType === 'rigid') {
+    pushKeyValue(
+      nodes,
+      'compensation',
+      contact.compensation !== undefined ? formatNumber(contact.compensation) : undefined,
+    );
+    pushKeyValue(
+      nodes,
+      'relaxation',
+      contact.relaxation !== undefined ? formatNumber(contact.relaxation) : undefined,
+    );
+  } else if (contact.contactType === 'elastic') {
+    pushKeyValue(
+      nodes,
+      'elasticity',
+      contact.elasticity !== undefined ? formatNumber(contact.elasticity) : undefined,
+    );
+    pushKeyValue(
+      nodes,
+      'viscosity',
+      contact.viscosity !== undefined ? formatNumber(contact.viscosity) : undefined,
+    );
+  }
+  pushKeyValue(
+    nodes,
+    'staticfriction',
+    contact.staticFriction !== undefined ? formatNumber(contact.staticFriction) : undefined,
+  );
+  pushKeyValue(
+    nodes,
+    'kineticfriction',
+    contact.kineticFriction !== undefined ? formatNumber(contact.kineticFriction) : undefined,
+  );
+  nodes.push(...contact.unknownKeys.map(cloneKeyValueNode));
+  return nodes;
+}
+
 function renderOptic(optic: ZtkOptic): ZtkNode[] {
   const nodes: ZtkNode[] = [createTagNode(optic.tag)];
   pushKeyValue(nodes, 'name', optic.name);
@@ -207,14 +293,49 @@ function renderOptic(optic: ZtkOptic): ZtkNode[] {
   return nodes;
 }
 
+function renderTexture(texture: ZtkTexture): ZtkNode[] {
+  const nodes: ZtkNode[] = [createTagNode(texture.tag)];
+  pushKeyValue(nodes, 'name', texture.name);
+  pushKeyValue(nodes, 'file', texture.file);
+  pushKeyValue(nodes, 'type', texture.type);
+  pushKeyValue(
+    nodes,
+    'depth',
+    texture.depth !== undefined ? formatNumber(texture.depth) : undefined,
+  );
+  for (const coord of texture.coords) {
+    pushKeyValue(nodes, 'coord', formatNumberList([coord.index, ...coord.uv]));
+  }
+  for (const face of texture.faces) {
+    pushKeyValue(nodes, 'face', formatNumberList(face.indices));
+  }
+  nodes.push(...texture.unknownKeys.map(cloneKeyValueNode));
+  return nodes;
+}
+
 function renderShape(shape: ZtkShape): ZtkNode[] {
   const nodes: ZtkNode[] = [createTagNode(shape.tag)];
   pushKeyValue(nodes, 'name', shape.name);
   pushKeyValue(nodes, 'type', shape.type);
   pushKeyValue(nodes, 'optic', shape.opticName);
   pushKeyValue(nodes, 'texture', shape.textureName);
-  pushKeyValue(nodes, 'mirror', shape.mirrorName);
-  pushKeyValue(nodes, 'import', shape.importName);
+  pushKeyValue(
+    nodes,
+    'mirror',
+    shape.mirrorName ? [shape.mirrorName, shape.mirrorAxis].filter(Boolean).join(' ') : undefined,
+  );
+  pushKeyValue(
+    nodes,
+    'import',
+    shape.importName
+      ? [
+          shape.importName,
+          shape.importScale !== undefined ? formatNumber(shape.importScale) : undefined,
+        ]
+          .filter((value) => value !== undefined)
+          .join(' ')
+      : undefined,
+  );
   pushTransform(nodes, shape.transform);
   const geometry = shape.geometry;
 
@@ -317,6 +438,9 @@ function renderShape(shape: ZtkShape): ZtkNode[] {
     for (const loop of geometry.loops) {
       pushKeyValue(nodes, 'loop', formatNumberList(loop));
     }
+    for (const loop of geometry.proceduralLoops) {
+      pushKeyValue(nodes, 'loop', loop.join(' '));
+    }
     for (const prism of geometry.prisms) {
       pushKeyValue(nodes, 'prism', formatNumberList(prism));
     }
@@ -324,6 +448,7 @@ function renderShape(shape: ZtkShape): ZtkNode[] {
       pushKeyValue(nodes, 'pyramid', formatNumberList(pyramid));
     }
   } else if (isGeometryType(geometry, 'nurbs')) {
+    pushKeyValue(nodes, 'dim', geometry.dim ? formatNumberList(geometry.dim) : undefined);
     for (const value of geometry.uKnots) {
       pushKeyValue(nodes, 'uknot', formatNumberList(value));
     }
@@ -345,6 +470,60 @@ function renderShape(shape: ZtkShape): ZtkNode[] {
   return nodes;
 }
 
+function renderMap(map: ZtkMap): ZtkNode[] {
+  const nodes: ZtkNode[] = [createTagNode(map.tag)];
+  pushKeyValue(nodes, 'name', map.name);
+  pushKeyValue(nodes, 'type', map.type);
+  if (map.terra) {
+    pushKeyValue(
+      nodes,
+      'origin',
+      map.terra.origin ? formatNumberList(map.terra.origin) : undefined,
+    );
+    pushKeyValue(
+      nodes,
+      'resolution',
+      map.terra.resolution ? formatNumberList(map.terra.resolution) : undefined,
+    );
+    pushKeyValue(nodes, 'size', map.terra.size ? formatNumberList(map.terra.size) : undefined);
+    pushKeyValue(
+      nodes,
+      'zrange',
+      map.terra.zrange ? formatNumberList(map.terra.zrange) : undefined,
+    );
+    pushKeyValue(
+      nodes,
+      'th_var',
+      map.terra.thVar !== undefined ? formatNumber(map.terra.thVar) : undefined,
+    );
+    pushKeyValue(
+      nodes,
+      'th_grd',
+      map.terra.thGrid !== undefined ? formatNumber(map.terra.thGrid) : undefined,
+    );
+    pushKeyValue(
+      nodes,
+      'th_res',
+      map.terra.thRes !== undefined ? formatNumber(map.terra.thRes) : undefined,
+    );
+    for (const grid of map.terra.grids) {
+      pushKeyValue(
+        nodes,
+        'grid',
+        formatNumberList([
+          ...grid.index,
+          grid.z,
+          ...grid.normal,
+          grid.variance,
+          grid.traversable ? 1 : 0,
+        ]),
+      );
+    }
+  }
+  nodes.push(...map.unknownKeys.map(cloneKeyValueNode));
+  return nodes;
+}
+
 function renderLink(link: ZtkLink): ZtkNode[] {
   const nodes: ZtkNode[] = [createTagNode(link.tag)];
   pushKeyValue(nodes, 'name', link.name);
@@ -356,10 +535,11 @@ function renderLink(link: ZtkLink): ZtkNode[] {
     link.density !== undefined ? formatNumber(link.density) : undefined,
   );
   pushKeyValue(nodes, 'stuff', link.stuff);
-  pushKeyValue(nodes, 'COM', link.com ? formatVec3(link.com) : undefined);
-  pushKeyValue(nodes, 'inertia', link.inertia ? formatMat3(link.inertia) : undefined);
+  pushKeyValue(nodes, 'COM', link.com ? formatVec3OrAuto(link.com) : undefined);
+  pushKeyValue(nodes, 'inertia', link.inertia ? formatMat3OrAuto(link.inertia) : undefined);
   pushTransform(nodes, link.transform);
   pushKeyValue(nodes, 'dis', link.dis ? formatNumberList(link.dis) : undefined);
+  pushKeyValue(nodes, 'break', link.breakValues ? formatNumberList(link.breakValues) : undefined);
   pushKeyValue(nodes, 'min', link.min !== undefined ? formatNumber(link.min) : undefined);
   pushKeyValue(nodes, 'max', link.max !== undefined ? formatNumber(link.max) : undefined);
   pushKeyValue(
@@ -416,10 +596,14 @@ export function semanticToAst(document: ZtkSemanticDocument): ZtkDocument {
   const groups = [
     renderChain(document.chain),
     ...document.optics.map(renderOptic),
+    ...document.textures.map(renderTexture),
     ...document.shapes.map(renderShape),
     ...document.motors.map(renderMotor),
+    ...document.contacts.map(renderContact),
     ...document.links.map(renderLink),
     renderChainInit(document.chainInit),
+    renderChainIk(document.chainIk),
+    ...document.maps.map(renderMap),
     ...document.unknownSections.map(renderUnknownSection),
   ];
 

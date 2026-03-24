@@ -37,6 +37,11 @@ function parseTagLine(line: string): ZtkTagNode | null {
   };
 }
 
+function stripInlineComment(value: string): string {
+  const index = value.indexOf('%');
+  return index >= 0 ? value.slice(0, index).trimEnd() : value;
+}
+
 function parseKeyValueLine(line: string): { key: string; value: string } | null {
   const index = line.indexOf(':');
   if (index < 0) {
@@ -45,7 +50,7 @@ function parseKeyValueLine(line: string): { key: string; value: string } | null 
 
   return {
     key: line.slice(0, index).trim(),
-    value: line.slice(index + 1).trim(),
+    value: stripInlineComment(line.slice(index + 1)).trim(),
   };
 }
 
@@ -59,6 +64,12 @@ function updateDepth(line: string, depth: number): number {
     }
   }
   return nextDepth;
+}
+
+function isIndentedContinuation(line: string): boolean {
+  return (
+    /^\s+/.test(line) && !isBlankLine(line) && !isCommentLine(line) && parseTagLine(line) === null
+  );
 }
 
 function parseKeyValueNode(
@@ -75,10 +86,26 @@ function parseKeyValueNode(
   let depth = updateDepth(firstLine.value, 0);
   let index = start;
 
-  while (depth > 0 && index + 1 < lines.length) {
+  while (index + 1 < lines.length) {
+    const nextLine = lines[index + 1];
+    const nextKeyValue = parseKeyValueLine(nextLine);
+
+    if (depth > 0) {
+      if (
+        !nextLine.trimStart().startsWith('}') &&
+        !nextLine.trimStart().startsWith(')') &&
+        !/^\s/.test(nextLine) &&
+        (parseTagLine(nextLine) !== null || nextKeyValue !== null)
+      ) {
+        break;
+      }
+    } else if (!isIndentedContinuation(nextLine)) {
+      break;
+    }
+
     index += 1;
     rawLines.push(lines[index]);
-    valueLines.push(lines[index].trim());
+    valueLines.push(stripInlineComment(lines[index]).trim());
     depth = updateDepth(lines[index], depth);
   }
 
