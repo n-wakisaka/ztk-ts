@@ -58,10 +58,11 @@ export type {
 export { resolveZtk } from './semantic.js';
 export { semanticToAst } from './semantic-ast.js';
 export type {
-  ZtkMaterializedRuntimeGeometryResolver,
+  ZtkImportedShapeFormat,
+  ZtkImportedShapeResolution,
+  ZtkImportedShapeSource,
   ZtkMaterializedRuntimeSerialization,
   ZtkMaterializedRuntimeSerializationAnalysis,
-  ZtkMaterializedRuntimeSerializationOptions,
   ZtkNormalizedSemanticSerialization,
   ZtkSemanticSerializationLayer,
   ZtkSourcePreservingSemanticSerialization,

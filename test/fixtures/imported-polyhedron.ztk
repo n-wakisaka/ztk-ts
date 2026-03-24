@@ -1,0 +1,7 @@
+[zeo::shape]
+name: imported-polyhedron
+type: polyhedron
+vert: 0 0 0
+vert: 1 0 0
+vert: 0 1 0
+face: 0 1 2

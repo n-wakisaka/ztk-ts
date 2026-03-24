@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import {
   analyzeSemanticZtkMaterializedRuntime,
@@ -509,7 +510,7 @@ mirror: source y
 
 [zeo::shape]
 name: imported
-import: mesh.stl 2
+import: mesh.dae 2
 `),
     );
 
@@ -519,7 +520,7 @@ import: mesh.stl 2
     expect(analysis.supported).toBe(false);
     expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
       'materializes-shape-mirror',
-      'requires-external-shape-import',
+      'unsupported-import-resolution',
     ]);
     expect(analysis.diagnostics.map((diagnostic) => diagnostic.effect)).toEqual([
       'runtime-materialization',
@@ -573,7 +574,7 @@ pos: 0 1 0
       parseZtk(`
 [zeo::shape]
 name: imported
-import: mesh.stl 2
+import: mesh.dae 2
 `),
     );
 
@@ -582,116 +583,268 @@ import: mesh.stl 2
     expect(serialized.supported).toBe(false);
     expect(serialized.text).toBeUndefined();
     expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
-      'requires-external-shape-import',
-    ]);
-    expect(serialized.diagnostics.map((diagnostic) => diagnostic.effect)).toEqual([
-      'runtime-materialization',
+      'unsupported-import-resolution',
     ]);
   });
 
-  test('materializes imported shapes when external geometry is provided', () => {
+  test('materializes imported .ztk polyhedron shapes for runtime export', () => {
+    const importedPath = fileURLToPath(
+      new URL('./fixtures/imported-polyhedron.ztk', import.meta.url),
+    );
     const semantic = resolveZtk(
       parseZtk(`
 [zeo::shape]
 name: imported
-import: mesh.stl 2
-texture: checker
+import: ${importedPath} 2
 `),
     );
 
-    const serialized = serializeSemanticZtkMaterializedRuntime(semantic, {
-      resolveImportedShapeGeometry: (shape) =>
-        shape.importName === 'mesh.stl'
-          ? {
-              type: 'box',
-              center: [0, 0, 0],
-              ax: undefined,
-              ay: undefined,
-              az: undefined,
-              depth: 1,
-              width: 2,
-              height: 3,
-            }
-          : undefined,
-    });
-    const reparsed = resolveZtk(parseZtk(serialized.text ?? ''));
-
-    expect(serialized.supported).toBe(true);
-    expect(serialized.text).toContain('type: box');
-    expect(serialized.text).not.toContain('import: mesh.stl 2');
-    expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
-      'materializes-shape-import',
-    ]);
-    expect(reparsed.shapes[0]?.type).toBe('box');
-    expect(reparsed.shapes[0]?.importName).toBeUndefined();
-    expect(reparsed.shapes[0]?.geometry).toEqual({
-      type: 'box',
-      center: [0, 0, 0],
-      ax: undefined,
-      ay: undefined,
-      az: undefined,
-      depth: 1,
-      width: 2,
-      height: 3,
-    });
-  });
-
-  test('materializes mirrors of imported shapes when external geometry is provided', () => {
-    const semantic = resolveZtk(
-      parseZtk(`
-[zeo::shape]
-name: imported
-import: mesh.stl
-
-[zeo::shape]
-name: mirrored
-mirror: imported x
-`),
-    );
-
-    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic, {
-      resolveImportedShapeGeometry: (shape) =>
-        shape.importName === 'mesh.stl'
-          ? {
-              type: 'sphere',
-              center: [1, 2, 3],
-              radius: 0.5,
-              div: undefined,
-            }
-          : undefined,
-    });
-    const serialized = serializeSemanticZtkMaterializedRuntime(semantic, {
-      resolveImportedShapeGeometry: (shape) =>
-        shape.importName === 'mesh.stl'
-          ? {
-              type: 'sphere',
-              center: [1, 2, 3],
-              radius: 0.5,
-              div: undefined,
-            }
-          : undefined,
-    });
+    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic);
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic);
     const reparsed = resolveZtk(parseZtk(serialized.text ?? ''));
 
     expect(analysis.supported).toBe(true);
     expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
       'materializes-shape-import',
-      'materializes-shape-mirror',
     ]);
     expect(serialized.supported).toBe(true);
-    expect(serialized.text).toContain('type: sphere');
-    expect(serialized.text).toContain('center: { -1, 2, 3 }');
-    expect(serialized.text).not.toContain('mirror: imported x');
+    expect(serialized.text).not.toContain('import:');
+    expect(serialized.text).toContain('type: polyhedron');
+    expect(serialized.text).toContain('vert: 0 0 0');
+    expect(serialized.text).toContain('vert: 2 0 0');
+    expect(serialized.text).toContain('vert: 0 2 0');
     expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
       'materializes-shape-import',
-      'materializes-shape-mirror',
     ]);
-    expect(reparsed.shapes[1]?.geometry).toEqual({
+    expect(reparsed.shapes[0]?.importName).toBeUndefined();
+    expect(reparsed.shapes[0]?.geometry).toEqual({
+      type: 'polyhedron',
+      vertices: [
+        [0, 0, 0],
+        [2, 0, 0],
+        [0, 2, 0],
+      ],
+      faces: [[0, 1, 2]],
+      loops: [],
+      proceduralLoops: [],
+      proceduralLoopDefs: [],
+      prisms: [],
+      pyramids: [],
+    });
+  });
+
+  test('reports import-resolution-failed when imported .ztk cannot be read', () => {
+    const missingPath = fileURLToPath(new URL('./fixtures/missing-import.ztk', import.meta.url));
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: ${missingPath}
+`),
+    );
+
+    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic);
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic);
+
+    expect(analysis.supported).toBe(false);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'import-resolution-failed',
+    ]);
+    expect(serialized.supported).toBe(false);
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'import-resolution-failed',
+    ]);
+  });
+
+  test('bakes imported .ztk shape transforms into resolved runtime geometry', () => {
+    const importedPath = fileURLToPath(
+      new URL('./fixtures/imported-sphere-transformed.ztk', import.meta.url),
+    );
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: ${importedPath}
+`),
+    );
+
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic);
+    const reparsed = resolveZtk(parseZtk(serialized.text ?? ''));
+
+    expect(serialized.supported).toBe(true);
+    expect(serialized.text).toContain('type: sphere');
+    expect(serialized.text).toContain('center: { 1, 2, 3 }');
+    expect(reparsed.shapes[0]?.geometry).toEqual({
       type: 'sphere',
-      center: [-1, 2, 3],
+      center: [1, 2, 3],
       radius: 0.5,
       div: undefined,
     });
+  });
+
+  test('reports import-resolution-failed for imported procedural polyhedron rotation', () => {
+    const importedPath = fileURLToPath(
+      new URL('./fixtures/imported-procedural-rotated.ztk', import.meta.url),
+    );
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: ${importedPath}
+`),
+    );
+
+    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic);
+
+    expect(analysis.supported).toBe(false);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'import-resolution-failed',
+    ]);
+  });
+
+  test('materializes imported .obj polyhedron shapes for runtime export', () => {
+    const importedPath = fileURLToPath(
+      new URL('./fixtures/imported-triangle.obj', import.meta.url),
+    );
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: ${importedPath} 3
+`),
+    );
+
+    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic);
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic);
+    const reparsed = resolveZtk(parseZtk(serialized.text ?? ''));
+
+    expect(analysis.supported).toBe(true);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'materializes-shape-import',
+    ]);
+    expect(serialized.supported).toBe(true);
+    expect(serialized.text).toContain('type: polyhedron');
+    expect(serialized.text).toContain('vert: 0.375 0.75 0');
+    expect(serialized.text).toContain('vert: 3.375 0.75 0');
+    expect(serialized.text).toContain('vert: 0.375 3.75 0');
+    expect(reparsed.shapes[0]?.geometry).toEqual({
+      type: 'polyhedron',
+      vertices: [
+        [0.375, 0.75, 0],
+        [3.375, 0.75, 0],
+        [0.375, 3.75, 0],
+      ],
+      faces: [[0, 1, 2]],
+      loops: [],
+      proceduralLoops: [],
+      proceduralLoopDefs: [],
+      prisms: [],
+      pyramids: [],
+    });
+  });
+
+  test('materializes imported .stl polyhedron shapes for runtime export', () => {
+    const importedPath = fileURLToPath(
+      new URL('./fixtures/imported-triangle.stl', import.meta.url),
+    );
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: ${importedPath} 2
+`),
+    );
+
+    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic);
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic);
+    const reparsed = resolveZtk(parseZtk(serialized.text ?? ''));
+
+    expect(analysis.supported).toBe(true);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'materializes-shape-import',
+    ]);
+    expect(serialized.supported).toBe(true);
+    expect(serialized.text).toContain('type: polyhedron');
+    expect(serialized.text).toContain('vert: 0.25 0.5 0');
+    expect(serialized.text).toContain('vert: 2.25 0.5 0');
+    expect(serialized.text).toContain('vert: 0.25 2.5 0');
+    expect(reparsed.shapes[0]?.geometry).toEqual({
+      type: 'polyhedron',
+      vertices: [
+        [0.25, 0.5, 0],
+        [2.25, 0.5, 0],
+        [0.25, 2.5, 0],
+      ],
+      faces: [[0, 1, 2]],
+      loops: [],
+      proceduralLoops: [],
+      proceduralLoopDefs: [],
+      prisms: [],
+      pyramids: [],
+    });
+  });
+
+  test('materializes imported .ply polyhedron shapes for runtime export', () => {
+    const importedPath = fileURLToPath(
+      new URL('./fixtures/imported-triangle.ply', import.meta.url),
+    );
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: ${importedPath} 2
+`),
+    );
+
+    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic);
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic);
+    const reparsed = resolveZtk(parseZtk(serialized.text ?? ''));
+
+    expect(analysis.supported).toBe(true);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'materializes-shape-import',
+    ]);
+    expect(serialized.supported).toBe(true);
+    expect(serialized.text).toContain('type: polyhedron');
+    expect(serialized.text).toContain('vert: 0.25 0.5 0');
+    expect(serialized.text).toContain('vert: 2.25 0.5 0');
+    expect(serialized.text).toContain('vert: 0.25 2.5 0');
+    expect(reparsed.shapes[0]?.geometry).toEqual({
+      type: 'polyhedron',
+      vertices: [
+        [0.25, 0.5, 0],
+        [2.25, 0.5, 0],
+        [0.25, 2.5, 0],
+      ],
+      faces: [[0, 1, 2]],
+      loops: [],
+      proceduralLoops: [],
+      proceduralLoopDefs: [],
+      prisms: [],
+      pyramids: [],
+    });
+  });
+
+  test('rejects unsupported import formats during materialized runtime export', () => {
+    const semantic = resolveZtk(
+      parseZtk(`
+[zeo::shape]
+name: imported
+import: mesh.glb
+`),
+    );
+
+    const analysis = analyzeSemanticZtkMaterializedRuntime(semantic);
+    const serialized = serializeSemanticZtkMaterializedRuntime(semantic);
+
+    expect(analysis.supported).toBe(false);
+    expect(analysis.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'unsupported-import-format',
+    ]);
+    expect(serialized.supported).toBe(false);
+    expect(serialized.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+      'unsupported-import-format',
+    ]);
   });
 
   test('materializes mirrored nurbs control points for runtime export', () => {

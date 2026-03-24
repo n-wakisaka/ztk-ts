@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   createDocument,
   type ZtkDocument,
@@ -6,13 +7,17 @@ import {
   type ZtkSection,
 } from './ast.js';
 import { createSerializationDiagnostic, type ZtkSerializationDiagnostic } from './diagnostics.js';
+import { loadImportedShapeGeometry } from './import-resolver.js';
+import { parseZtk } from './parse.js';
 import type {
+  ZtkMat3,
   ZtkProceduralLoop,
   ZtkSemanticDocument,
   ZtkShape,
   ZtkShapeGeometry,
   ZtkVec3,
 } from './semantic.js';
+import { resolveZtk } from './semantic.js';
 import { semanticToAst } from './semantic-ast.js';
 import { serializeZtk, serializeZtkNormalized } from './serialize.js';
 
@@ -49,13 +54,24 @@ export type ZtkMaterializedRuntimeSerialization = {
   diagnostics: ZtkSerializationDiagnostic[];
 };
 
-export type ZtkMaterializedRuntimeGeometryResolver = (
-  shape: ZtkShape,
-) => ZtkShapeGeometry | undefined;
+export type ZtkImportedShapeFormat = 'ztk' | 'stl' | 'obj' | 'ply' | 'dae' | 'unknown';
 
-export type ZtkMaterializedRuntimeSerializationOptions = {
-  resolveImportedShapeGeometry?: ZtkMaterializedRuntimeGeometryResolver;
+export type ZtkImportedShapeSource = {
+  importName: string;
+  importScale?: number;
+  format: ZtkImportedShapeFormat;
 };
+
+export type ZtkImportedShapeResolution =
+  | {
+      kind: 'resolved';
+      geometry: ZtkShapeGeometry;
+    }
+  | {
+      kind: 'failed';
+      code: 'unsupported-import-resolution' | 'import-resolution-failed';
+      message: string;
+    };
 
 function pushDiagnostic(
   diagnostics: ZtkSerializationDiagnostic[],
@@ -87,6 +103,29 @@ function hasNumericTokens(node: ZtkKeyValueNode): boolean {
   return node.values.length > 0 && node.values.every((token) => !Number.isNaN(Number(token)));
 }
 
+function inferImportedShapeFormat(importName: string | undefined): ZtkImportedShapeFormat {
+  if (!importName) {
+    return 'unknown';
+  }
+
+  const lastDot = importName.lastIndexOf('.');
+  if (lastDot < 0 || lastDot === importName.length - 1) {
+    return 'unknown';
+  }
+
+  const suffix = importName.slice(lastDot + 1).toLowerCase();
+  switch (suffix) {
+    case 'ztk':
+    case 'stl':
+    case 'obj':
+    case 'ply':
+    case 'dae':
+      return suffix;
+    default:
+      return 'unknown';
+  }
+}
+
 function mirrorVec3(value: ZtkVec3, axis: string): ZtkVec3 {
   const mirrored: ZtkVec3 = [...value];
   if (axis === 'x') {
@@ -98,6 +137,318 @@ function mirrorVec3(value: ZtkVec3, axis: string): ZtkVec3 {
   }
 
   return mirrored;
+}
+
+function scaleVec3(value: ZtkVec3, scale: number): ZtkVec3 {
+  return [value[0] * scale, value[1] * scale, value[2] * scale];
+}
+
+function multiplyMat3Vec3(matrix: ZtkMat3, value: ZtkVec3): ZtkVec3 {
+  return [
+    matrix[0] * value[0] + matrix[1] * value[1] + matrix[2] * value[2],
+    matrix[3] * value[0] + matrix[4] * value[1] + matrix[5] * value[2],
+    matrix[6] * value[0] + matrix[7] * value[1] + matrix[8] * value[2],
+  ];
+}
+
+function addVec3(left: ZtkVec3, right: ZtkVec3): ZtkVec3 {
+  return [left[0] + right[0], left[1] + right[1], left[2] + right[2]];
+}
+
+function transformPoint(att: ZtkMat3, pos: ZtkVec3, value: ZtkVec3): ZtkVec3 {
+  return addVec3(multiplyMat3Vec3(att, value), pos);
+}
+
+function transformDirection(att: ZtkMat3, value: ZtkVec3): ZtkVec3 {
+  return multiplyMat3Vec3(att, value);
+}
+
+function isIdentityMat3(matrix: ZtkMat3): boolean {
+  return (
+    matrix[0] === 1 &&
+    matrix[1] === 0 &&
+    matrix[2] === 0 &&
+    matrix[3] === 0 &&
+    matrix[4] === 1 &&
+    matrix[5] === 0 &&
+    matrix[6] === 0 &&
+    matrix[7] === 0 &&
+    matrix[8] === 1
+  );
+}
+
+function scaleProceduralLoop(loop: ZtkProceduralLoop, scale: number): ZtkProceduralLoop {
+  const commands = loop.commands.map((command) => {
+    if (command.kind === 'point') {
+      return {
+        kind: 'point' as const,
+        point: [command.point[0] * scale, command.point[1] * scale] as [number, number],
+      };
+    }
+
+    return {
+      kind: 'arc' as const,
+      direction: command.direction,
+      radius: command.radius * scale,
+      div: command.div,
+      endpoint: command.endpoint
+        ? ([command.endpoint[0] * scale, command.endpoint[1] * scale] as [number, number])
+        : undefined,
+    };
+  });
+
+  return {
+    planeAxis: loop.planeAxis,
+    planeValue: loop.planeValue * scale,
+    commands,
+    tokens: [],
+  };
+}
+
+function scaleImportedShapeGeometry(
+  geometry: ZtkShapeGeometry,
+  scale: number | undefined,
+): ZtkImportedShapeResolution {
+  if (scale === undefined || scale === 1) {
+    return {
+      kind: 'resolved',
+      geometry,
+    };
+  }
+
+  if (!isGeometryType(geometry, 'polyhedron')) {
+    return {
+      kind: 'failed',
+      code: 'import-resolution-failed',
+      message: `Import scale is only supported for polyhedron geometry, but resolved ".ztk" shape type is "${geometry.type}"`,
+    };
+  }
+
+  const proceduralLoopDefs = geometry.proceduralLoopDefs.map((loop) =>
+    scaleProceduralLoop(loop, scale),
+  );
+
+  return {
+    kind: 'resolved',
+    geometry: {
+      ...geometry,
+      vertices: geometry.vertices.map((vertex) => scaleVec3(vertex as ZtkVec3, scale)),
+      proceduralLoops: proceduralLoopDefs.map((loop) => proceduralLoopToTokens(loop)),
+      proceduralLoopDefs,
+      prisms: geometry.prisms.map((prism) => scaleVec3(prism as ZtkVec3, scale)),
+      pyramids: geometry.pyramids.map((pyramid) => scaleVec3(pyramid as ZtkVec3, scale)),
+    },
+  };
+}
+
+function transformProceduralLoop(loop: ZtkProceduralLoop, pos: ZtkVec3): ZtkProceduralLoop {
+  const planeAxis = loop.planeAxis === 'x' ? 0 : loop.planeAxis === 'y' ? 1 : 2;
+  const loopOffset =
+    planeAxis === 0
+      ? ([pos[1], pos[2]] as [number, number])
+      : planeAxis === 1
+        ? ([pos[2], pos[0]] as [number, number])
+        : ([pos[0], pos[1]] as [number, number]);
+
+  const commands = loop.commands.map((command) => {
+    if (command.kind === 'point') {
+      return {
+        kind: 'point' as const,
+        point: [command.point[0] + loopOffset[0], command.point[1] + loopOffset[1]] as [
+          number,
+          number,
+        ],
+      };
+    }
+
+    return {
+      kind: 'arc' as const,
+      direction: command.direction,
+      radius: command.radius,
+      div: command.div,
+      endpoint: command.endpoint
+        ? ([command.endpoint[0] + loopOffset[0], command.endpoint[1] + loopOffset[1]] as [
+            number,
+            number,
+          ])
+        : undefined,
+    };
+  });
+
+  return {
+    planeAxis: loop.planeAxis,
+    planeValue: loop.planeValue + pos[planeAxis],
+    commands,
+    tokens: [],
+  };
+}
+
+function bakeImportedShapeTransform(
+  geometry: ZtkShapeGeometry,
+  shape: ZtkShape,
+): ZtkImportedShapeResolution {
+  const { pos, att } = shape.transform.resolved;
+  const hasTranslation = pos[0] !== 0 || pos[1] !== 0 || pos[2] !== 0;
+  const hasRotation = !isIdentityMat3(att);
+
+  if (!hasTranslation && !hasRotation) {
+    return {
+      kind: 'resolved',
+      geometry,
+    };
+  }
+
+  if (isGeometryType(geometry, 'box')) {
+    return {
+      kind: 'resolved',
+      geometry: {
+        ...geometry,
+        center: geometry.center ? transformPoint(att, pos, geometry.center) : pos,
+        ax:
+          geometry.ax && geometry.ax !== 'auto'
+            ? transformDirection(att, geometry.ax)
+            : geometry.ax,
+        ay:
+          geometry.ay && geometry.ay !== 'auto'
+            ? transformDirection(att, geometry.ay)
+            : geometry.ay,
+        az:
+          geometry.az && geometry.az !== 'auto'
+            ? transformDirection(att, geometry.az)
+            : geometry.az,
+      },
+    };
+  }
+
+  if (isGeometryType(geometry, 'sphere')) {
+    return {
+      kind: 'resolved',
+      geometry: {
+        ...geometry,
+        center: geometry.center ? transformPoint(att, pos, geometry.center) : pos,
+      },
+    };
+  }
+
+  if (isGeometryType(geometry, 'cylinder') || isGeometryType(geometry, 'capsule')) {
+    return {
+      kind: 'resolved',
+      geometry: {
+        ...geometry,
+        centers: geometry.centers.map((center) => transformPoint(att, pos, center as ZtkVec3)),
+      },
+    };
+  }
+
+  if (isGeometryType(geometry, 'cone')) {
+    return {
+      kind: 'resolved',
+      geometry: {
+        ...geometry,
+        center: geometry.center ? transformPoint(att, pos, geometry.center) : pos,
+        vert: geometry.vert ? transformPoint(att, pos, geometry.vert) : undefined,
+      },
+    };
+  }
+
+  if (isGeometryType(geometry, 'ellipsoid')) {
+    return {
+      kind: 'resolved',
+      geometry: {
+        ...geometry,
+        center: geometry.center ? transformPoint(att, pos, geometry.center) : pos,
+        ax:
+          geometry.ax && geometry.ax !== 'auto'
+            ? transformDirection(att, geometry.ax)
+            : geometry.ax,
+        ay:
+          geometry.ay && geometry.ay !== 'auto'
+            ? transformDirection(att, geometry.ay)
+            : geometry.ay,
+        az:
+          geometry.az && geometry.az !== 'auto'
+            ? transformDirection(att, geometry.az)
+            : geometry.az,
+      },
+    };
+  }
+
+  if (isGeometryType(geometry, 'ellipticcylinder')) {
+    return {
+      kind: 'resolved',
+      geometry: {
+        ...geometry,
+        centers: geometry.centers.map((center) => transformPoint(att, pos, center as ZtkVec3)),
+        ref: geometry.ref ? transformDirection(att, geometry.ref) : undefined,
+      },
+    };
+  }
+
+  if (isGeometryType(geometry, 'polyhedron')) {
+    if (geometry.proceduralLoopDefs.length > 0) {
+      if (hasRotation) {
+        return {
+          kind: 'failed',
+          code: 'import-resolution-failed',
+          message:
+            'Imported ".ztk" procedural polyhedron cannot be materialized with a non-identity transform yet',
+        };
+      }
+
+      const proceduralLoopDefs = geometry.proceduralLoopDefs.map((loop) =>
+        transformProceduralLoop(loop, pos),
+      );
+
+      return {
+        kind: 'resolved',
+        geometry: {
+          ...geometry,
+          proceduralLoops: proceduralLoopDefs.map((loop) => proceduralLoopToTokens(loop)),
+          proceduralLoopDefs,
+          prisms: geometry.prisms.map((prism) => addVec3(prism as ZtkVec3, pos)),
+          pyramids: geometry.pyramids.map((pyramid) => addVec3(pyramid as ZtkVec3, pos)),
+        },
+      };
+    }
+
+    return {
+      kind: 'resolved',
+      geometry: {
+        ...geometry,
+        vertices: geometry.vertices.map((vertex) => transformPoint(att, pos, vertex as ZtkVec3)),
+      },
+    };
+  }
+
+  if (isGeometryType(geometry, 'nurbs')) {
+    return {
+      kind: 'resolved',
+      geometry: {
+        ...geometry,
+        controlPoints: geometry.controlPoints.map((point) => {
+          const transformed = transformPoint(att, pos, [
+            point[3] ?? 0,
+            point[4] ?? 0,
+            point[5] ?? 0,
+          ]);
+          return [
+            point[0] ?? 0,
+            point[1] ?? 0,
+            point[2] ?? 1,
+            transformed[0],
+            transformed[1],
+            transformed[2],
+          ];
+        }),
+      },
+    };
+  }
+
+  return {
+    kind: 'failed',
+    code: 'import-resolution-failed',
+    message: `Imported ".ztk" shape transform is not supported for geometry type "${geometry.type}"`,
+  };
 }
 
 function mirrorOptionalVec3(value: ZtkVec3 | undefined, axis: string): ZtkVec3 | undefined {
@@ -313,7 +664,6 @@ function mirrorShapeGeometry(
 }
 
 type MaterializationContext = {
-  options: ZtkMaterializedRuntimeSerializationOptions;
   diagnostics: ZtkSerializationDiagnostic[];
   cache: WeakMap<ZtkShape, ZtkShape | undefined>;
   active: WeakSet<ZtkShape>;
@@ -321,14 +671,73 @@ type MaterializationContext = {
 
 function createMaterializationContext(
   diagnostics: ZtkSerializationDiagnostic[],
-  options: ZtkMaterializedRuntimeSerializationOptions,
 ): MaterializationContext {
   return {
-    options,
     diagnostics,
     cache: new WeakMap(),
     active: new WeakSet(),
   };
+}
+
+function resolveImportedShape(
+  _shape: ZtkShape,
+  source: ZtkImportedShapeSource,
+): ZtkImportedShapeResolution {
+  if (source.format !== 'ztk') {
+    const loaded = loadImportedShapeGeometry(_shape, source);
+    if (loaded.kind === 'failed') {
+      return loaded;
+    }
+
+    const transformed = bakeImportedShapeTransform(loaded.geometry, _shape);
+    if (transformed.kind === 'failed') {
+      return transformed;
+    }
+
+    return scaleImportedShapeGeometry(transformed.geometry, source.importScale);
+  }
+
+  let text: string;
+  try {
+    text = readFileSync(source.importName, 'utf8');
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      kind: 'failed',
+      code: 'import-resolution-failed',
+      message: `Failed to read imported ".ztk" shape "${source.importName}": ${detail}`,
+    };
+  }
+
+  const imported = resolveZtk(parseZtk(text));
+  const importedShape = imported.shapes[0];
+  if (!importedShape) {
+    return {
+      kind: 'failed',
+      code: 'import-resolution-failed',
+      message: `Imported ".ztk" shape "${source.importName}" does not contain a zeo::shape section`,
+    };
+  }
+
+  const nestedContext = createMaterializationContext([]);
+  const materialized = materializeRuntimeShape(importedShape, nestedContext);
+  if (!materialized) {
+    const nestedDetail = nestedContext.diagnostics[0]?.message;
+    return {
+      kind: 'failed',
+      code: 'import-resolution-failed',
+      message: nestedDetail
+        ? `Failed to materialize imported ".ztk" shape "${source.importName}": ${nestedDetail}`
+        : `Failed to materialize imported ".ztk" shape "${source.importName}"`,
+    };
+  }
+
+  const transformed = bakeImportedShapeTransform(materialized.geometry, importedShape);
+  if (transformed.kind === 'failed') {
+    return transformed;
+  }
+
+  return scaleImportedShapeGeometry(transformed.geometry, source.importScale);
 }
 
 function isTransformKey(key: string): boolean {
@@ -695,10 +1104,9 @@ export function serializeSemanticZtkNormalized(
 
 export function analyzeSemanticZtkMaterializedRuntime(
   document: ZtkSemanticDocument,
-  options: ZtkMaterializedRuntimeSerializationOptions = {},
 ): ZtkMaterializedRuntimeSerializationAnalysis {
   const diagnostics: ZtkSerializationDiagnostic[] = [];
-  const context = createMaterializationContext(diagnostics, options);
+  const context = createMaterializationContext(diagnostics);
   let supported = true;
 
   for (const shape of document.shapes) {
@@ -801,13 +1209,30 @@ function materializeRuntimeShape(
     return materialized;
   }
 
-  const resolvedImportGeometry = context.options.resolveImportedShapeGeometry?.(shape);
-  if (!resolvedImportGeometry) {
+  const importSource: ZtkImportedShapeSource = {
+    importName: shape.importName ?? '',
+    importScale: shape.importScale,
+    format: inferImportedShapeFormat(shape.importName),
+  };
+  if (importSource.format === 'unknown') {
     pushDiagnostic(context.diagnostics, {
-      code: 'requires-external-shape-import',
+      code: 'unsupported-import-format',
       effect: 'runtime-materialization',
-      message:
-        'Runtime materialization of imported shapes requires external geometry that is not preserved in the semantic model',
+      message: `Unsupported import format for "${importSource.importName}"`,
+      tag: 'zeo::shape',
+      key: 'import',
+    });
+    context.active.delete(shape);
+    context.cache.set(shape, undefined);
+    return undefined;
+  }
+
+  const resolution = resolveImportedShape(shape, importSource);
+  if (resolution.kind === 'failed') {
+    pushDiagnostic(context.diagnostics, {
+      code: resolution.code,
+      effect: 'runtime-materialization',
+      message: resolution.message,
       tag: 'zeo::shape',
       key: 'import',
     });
@@ -819,20 +1244,20 @@ function materializeRuntimeShape(
   pushDiagnostic(context.diagnostics, {
     code: 'materializes-shape-import',
     effect: 'runtime-materialization',
-    message: `Runtime materialization replaces import source "${shape.importName}" with externally resolved shape geometry`,
+    message: `Runtime materialization replaces import source "${shape.importName}" (${importSource.format}) with resolved shape geometry`,
     tag: 'zeo::shape',
     key: 'import',
   });
 
   const materialized = {
     ...shape,
-    type: resolvedImportGeometry.type,
+    type: resolution.geometry.type,
     mirrorName: undefined,
     mirrorAxis: undefined,
     importName: undefined,
     importScale: undefined,
     mirror: undefined,
-    geometry: resolvedImportGeometry,
+    geometry: resolution.geometry,
   };
   context.active.delete(shape);
   context.cache.set(shape, materialized);
@@ -841,11 +1266,10 @@ function materializeRuntimeShape(
 
 export function serializeSemanticZtkMaterializedRuntime(
   document: ZtkSemanticDocument,
-  options: ZtkMaterializedRuntimeSerializationOptions = {},
 ): ZtkMaterializedRuntimeSerialization {
   const diagnostics: ZtkSerializationDiagnostic[] = [];
   const materializedShapes: ZtkShape[] = [];
-  const context = createMaterializationContext(diagnostics, options);
+  const context = createMaterializationContext(diagnostics);
 
   for (const shape of document.shapes) {
     const materialized = materializeRuntimeShape(shape, context);

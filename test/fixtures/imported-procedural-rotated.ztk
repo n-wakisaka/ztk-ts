@@ -1,0 +1,9 @@
+[zeo::shape]
+name: rotated-loop
+type: polyhedron
+loop: z 0
+ 0 0
+ 1 0
+ 0 1
+prism: 0 0 1
+rot: 0 0 1 90
