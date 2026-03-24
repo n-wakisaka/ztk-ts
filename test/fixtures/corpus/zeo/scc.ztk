@@ -1,0 +1,51 @@
+[zeo::optic]
+name: yellow
+ambient: 0.8, 0.8, 0.2
+diffuse: 0.8, 0.8, 0.2
+specular: 0.0, 0.0, 0.0
+alpha: 1
+esr: 1
+
+[zeo::optic]
+name: cyan
+ambient: 0.4, 1.0, 1.0
+diffuse: 0.4, 1.0, 1.0
+specular: 0.0, 0.0, 0.0
+alpha: 0.8
+esr: 1
+
+[zeo::optic]
+name: green
+ambient: 0.2, 1.0, 0.2
+diffuse: 0.2, 1.0, 0.2
+specular: 0.0, 0.0, 0.0
+alpha: 0.9
+esr: 1
+
+[zeo::shape]
+name : cone
+type : cone
+optic: green
+center: ( -0.2, 0.2,-0.2 )
+vert: ( -0.2, 0.0, 0.1 )
+vert: ( 100, 200, 300 )
+radius: 0.08
+
+[zeo::shape]
+name : sphere
+type : sphere
+optic: yellow
+center: ( -0.2, -0.1, 0.0 )
+center: ( 100, 200, 300 )
+radius: 0.1
+radius: 100
+
+[zeo::shape]
+name : cylinder
+type : cylinder
+optic: cyan
+center: ( -0.2,-0.1,-0.2 )
+center: ( -0.2, 0.2, 0.2 )
+center: ( -0.2, 1.2, 0.2 )
+radius: 0.06
+radius: 0.6

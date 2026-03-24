@@ -1,0 +1,33 @@
+{
+  "name": "@mi-lib/ztk-ts",
+  "version": "0.1.0",
+  "description": "TypeScript parser and AST toolkit for ZTK files",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p test/tsconfig.json --noEmit",
+    "test": "vitest run",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "author": "n-wakisaka",
+  "license": "MIT",
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.8",
+    "@types/node": "^22.19.15",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}
